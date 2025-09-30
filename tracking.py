@@ -1,5 +1,3 @@
-import bpy
-from abc import ABC, abstractmethod
 
 """
 "updates" are just generic commits. Not commits to a git repo, just a stream of updates from blender.
@@ -46,6 +44,8 @@ So after all that, each update should return their data blocks. But then what is
 couldn't we just create a list of strings of the updates to watch for and a simple for loop?
 """
 
+import bpy
+from abc import ABC, abstractmethod
 
 class Update(ABC):
     """
