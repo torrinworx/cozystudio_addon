@@ -8,7 +8,6 @@ bl_info = {
     "warning": "",
     "category": "Generic",
 }
-
 from . import auto_load
 
 auto_load.init()
