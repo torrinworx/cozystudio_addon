@@ -1,23 +1,22 @@
 """
 Stream raw depsgraph data blocks.
 
-This class allows you to get a stream of depsgraph data blocks from Blender live as the Blender file is being updated.
+This class allows you to get a stream of despgraph data blocks from blender live as the blender file is being updated.
 
-The allowed data blocks are only those that are required to replicate a Blender file over the wire. Data blocks not
+The allowed data blocks are only those that are reuqired to replicate a blender file over the wire. Data blocks not
 essential to this task are ignored.
 
-The class provides a `.stream()` function, a Python generator that returns the stream of data blocks.
+The class should return a .stream() function, a python generator that returns the stream of data blocks.
 
-For each update we get from Blender, there is a list of things in the Blender file that have changed. We need to filter out
-unrelated changes from that list and return it from the generator.
-
-TODO: In addition to .blend file replication over the wire, user specific data is also sent as meta blocks that can be used
-to style and display other users over the wire: viewport location, viewport direction, viewport size/metrics, current selected object (if any)
+For each update we get from blender, there is a list of things in the blender file that have changed. We need to filter out
+unrelated changes from that list, and return it from the generator.
 """
 
 import bpy
+import threading
 import queue
 from typing import Generator, Optional, List
+
 
 # Define allowed datablock types
 ALLOWED_TYPES = (
@@ -43,7 +42,7 @@ _SENTINEL = object()
 
 class Updates:
     """
-    Stream raw depsgraph datablocks.
+    Stream raw depsgraph datablocks for live collaboration.
     Hooks into `bpy.app.handlers.depsgraph_update_post`
     and captures allowed datablock updates as they occur.
     """
@@ -53,12 +52,14 @@ class Updates:
         self.active: bool = True
         bpy.app.handlers.depsgraph_update_post.append(self.on_update)
 
-    def on_update(self, depsgraph: bpy.types.Depsgraph):
+    def on_update(self, _, depsgraph: bpy.types.Depsgraph):
         """Collect updates from Blender's dependency graph."""
         try:
             # Filter updates
             filtered_updates: List[bpy.types.ID] = [
-                update.id for update in depsgraph.updates if isinstance(update.id, ALLOWED_TYPES)
+                update.id
+                for update in depsgraph.updates
+                if isinstance(update.id, ALLOWED_TYPES)
             ]
 
             if filtered_updates:
@@ -98,7 +99,14 @@ def register():
     global _updates_manager
     if _updates_manager is None:
         _updates_manager = Updates()
-        print("Updates manager registered.")
+
+        def print_updates():
+            for update_list in _updates_manager.stream():
+                for update in update_list:
+                    print(update)
+
+        thread = threading.Thread(target=print_updates, daemon=True)
+        thread.start()
 
 
 def unregister():
@@ -106,4 +114,3 @@ def unregister():
     if _updates_manager:
         _updates_manager.close()
         _updates_manager = None
-        print("Updates manager unregistered.")
