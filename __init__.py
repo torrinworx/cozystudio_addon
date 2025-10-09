@@ -2,7 +2,7 @@ bl_info = {
     "name": "Cozy Studio",
     "author": "Torrin Leonard",
     "description": "",
-    "blender": (2, 80, 0),
+    "blender": (4, 5, 3),
     "version": (0, 0, 1),
     "location": "",
     "warning": "",

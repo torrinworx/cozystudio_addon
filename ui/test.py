@@ -1,30 +1,67 @@
-# ui/panel.py
 import bpy
-from ..core.logic import say_hello
+from ..core.git import Git
+from bpy.app.handlers import persistent
 
+git_instance = None
 
-class COZYSTUDIO_OT_test(bpy.types.Operator):
-    """Simple operator that calls core logic"""
-
-    bl_idname = "cozystudio_addon.recording"
-    bl_label = "Say Hello"
+class COZYSTUDIO_OT_PrintOperator(bpy.types.Operator):
+    bl_idname = "cozystudio.compare"
+    bl_label = "Compare"
 
     def execute(self, context):
-        say_hello()
-        self.report({"INFO"}, "Replaying recording")
-        return {"FINISHED"}
+        global git_instance
+        git_instance.compare()
+        return {'FINISHED'}
 
 
-class COZYSTUDIO_PT_main(bpy.types.Panel):
-    """UI panel with a hello button"""
-
+class COZYSTUDIO_PT_Panel(bpy.types.Panel):
     bl_label = "Cozy Studio"
-    bl_idname = "COZYSTUDIO_PT_main"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
+    bl_idname = "COZYSTUDIO_PT_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
     bl_category = "Cozy Studio"
 
     def draw(self, context):
         layout = self.layout
-        layout.label(text="Replay test")
-        layout.operator("cozystudio_addon.recording", text="Replay recording")
+        layout.label(text="Click the button:")
+        layout.operator("cozystudio.compare", text="Git Compare Test")
+
+
+def is_data_restricted():
+    try:
+        _ = bpy.data.filepath
+        return False
+    except AttributeError:
+        return True
+
+
+def check_and_init_git():
+    global git_instance
+
+    if is_data_restricted():
+        # Still restricted, reschedule to try again in 0.5 seconds
+        return 0.5
+    
+    git_instance = Git()
+    return None
+
+@persistent
+def init_git_on_load(_dummy=None):
+    bpy.app.timers.register(check_and_init_git, first_interval=0.5)
+
+
+def register():
+    # Ensure Git will be (re)initialized if a .blend file is already open
+    bpy.app.timers.register(check_and_init_git)
+
+    # Also ensure future file loads re-init Git by adding a load_post handler
+    if init_git_on_load not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(init_git_on_load)
+
+
+def unregister():
+    if init_git_on_load in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(init_git_on_load)
+
+    global git_instance
+    git_instance = None
