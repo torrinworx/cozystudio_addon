@@ -37,20 +37,25 @@ What we are offloading to git:
 
 
 
-I'm still debating if we should allow traditional merge requests or rebases? Like I can't comprehend how that would work with 
+I'm still debating if we should allow traditional merge requests or rebases? Like I can't comprehend how that would work with
 data blocks. What is the industry standard for a version control system? Is it overwrite or nothing? how should we handle that?
 
 
 
+For storing data blocks in git lfs, look into blender data writing, storing data blocks directly to a .blend file, keeping track of which
+blend file is the current version of the data blocks listed in manifest, then pull from that blend file to build the blender file at a
+given git commit hash for the manifest.
 
 
-
-
-
+Future:
+Need still: Some lightweight diffing system, looks at tracked blender type properties to simply tell the user "Object was moved from xyz to xyz"
 """
-
+import os
 import bpy
+import json
 import hashlib
+
+from ..core.track import Track
 
 TRACKABLE_TYPES = {  # just some basic examples.
     "objects": ["location", "rotation_euler", "scale", "data", "material_slots"],
@@ -65,13 +70,31 @@ TRACKABLE_TYPES = {  # just some basic examples.
 
 class Git:
     def __init__(self):
-        self.previous_state = self.current()
-        self.current_state = []
+        track = Track()
+        track.start()
+
+        self.current_state = self.current()
         self.filepath = bpy.data.filepath
+        self.path = bpy.path.abspath("//")
+        
+
+    def init(self):
+        """
+        TODO: trigger modal popup: "Create blender git in /path/to/files/folder? This folder will become your
+        project folder, all changes in this folder will be tracked."
+        """
+        self.current_state = self.current()
+
+        with open(os.path.join(self.path, "cozystudio.json"), "w") as json_file:
+            json.dump(self.current_state, json_file, indent=4)
 
     @staticmethod
     def db_hash(db, tracked_props=None):
-        """Return a hash over an explicit or generic set of properties."""
+        """
+        Return a hash over an explicit or generic set of properties for a data block.
+        
+        Used as a lightweight way to track if changes were made to data blocks.
+        """
         h = hashlib.sha1()
         if tracked_props:
             for pname in tracked_props:
@@ -81,7 +104,9 @@ class Git:
                     value = getattr(db, pname)
                     if isinstance(value, bpy.types.bpy_struct):
                         h.update(f"{value.__class__.__name__}:{value.name}".encode())
-                    elif hasattr(value, "__iter__") and not isinstance(value, (str, bytes)):
+                    elif hasattr(value, "__iter__") and not isinstance(
+                        value, (str, bytes)
+                    ):
                         joined = ",".join(
                             str(v.name if hasattr(v, "name") else v) for v in value
                         )
@@ -123,36 +148,10 @@ class Git:
                     {
                         "type": data_type,
                         "name": db.name,
+                        "name_full": db.name_full,
+                        "cozystudio_uuid": db.cozystudio_uuid,
                         "hash": self.db_hash(db, props),
-                        "values": {p: getattr(db, p) for p in props if hasattr(db, p)}
                     }
                 )
 
         return blocks
-
-    def compare(self):
-        """Compare with the previous snapshot, then update baseline."""
-        self.current_state = self.current()
-
-        prev = {(b["type"], b["name"]): b for b in self.previous_state}
-        cur = {(b["type"], b["name"]): b for b in self.current_state}
-
-        added = set(cur) - set(prev)
-        removed = set(prev) - set(cur)
-        changed = [k for k in set(cur) & set(prev) if cur[k]["hash"] != prev[k]["hash"]]
-
-        print("==== DIFF RESULT ====")
-        if added:
-            print("Added:")
-            [print(f"  + {t}:{n}") for t, n in added]
-        if removed:
-            print("Removed:")
-            [print(f"  - {t}:{n}") for t, n in removed]
-        if changed:
-            print("Modified:")
-            [print(f"  * {t}:{n}") for t, n in changed]
-        if not (added or removed or changed):
-            print("No differences.")
-
-        self.previous_state = self.current_state.copy()
-        return {"added": added, "removed": removed, "changed": changed}

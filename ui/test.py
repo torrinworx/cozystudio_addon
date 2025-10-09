@@ -4,13 +4,33 @@ from bpy.app.handlers import persistent
 
 git_instance = None
 
+class COZYSTUDIO_OT_SavePrompt(bpy.types.Operator):
+    """Ask user to save the file before continuing"""
+    bl_idname = "cozystudio.save_prompt"
+    bl_label = "Save Blend File Required"
+
+    def execute(self, context):
+        bpy.ops.wm.save_mainfile('INVOKE_DEFAULT')
+        self.report({'INFO'}, "Please save your .blend file before continuing.")
+        return {'CANCELLED'}
+
+    def invoke(self, context, event):
+        wm = context.window_manager
+        return wm.invoke_confirm(self, event)
+
+
 class COZYSTUDIO_OT_PrintOperator(bpy.types.Operator):
     bl_idname = "cozystudio.compare"
     bl_label = "Compare"
 
     def execute(self, context):
         global git_instance
-        git_instance.compare()
+
+        if not bpy.data.filepath:
+            bpy.ops.cozystudio.save_prompt('INVOKE_DEFAULT')
+            return {'CANCELLED'}
+
+        git_instance.init()
         return {'FINISHED'}
 
 
@@ -23,9 +43,7 @@ class COZYSTUDIO_PT_Panel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        layout.label(text="Click the button:")
         layout.operator("cozystudio.compare", text="Git Compare Test")
-
 
 def is_data_restricted():
     try:
@@ -42,6 +60,10 @@ def check_and_init_git():
         # Still restricted, reschedule to try again in 0.5 seconds
         return 0.5
     
+    elif bpy.data.filepath == "":
+        git_instance = None
+        return None
+
     git_instance = Git()
     return None
 
