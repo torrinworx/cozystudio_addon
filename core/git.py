@@ -122,17 +122,16 @@ class Git:
             self.write(block)
 
         # --- Simple test of bpy_protocol serialization ---------------------
-        # Make sure we actually have a Camera in the file
         if bpy.data.cameras:
             camera = bpy.data.cameras[0]
             print(f"[CozyStudio] Testing serialization of camera: {camera.name}")
 
-            # Serialize this datablock using the Multi‑User protocol
             try:
+                # Serialize this datablock using the Multi‑User protocol
                 camera_dict = self.bpy_protocol.dump(camera)
 
                 # For demonstration, print a small portion and optionally write to disk
-                print(json.dumps(camera_dict, indent=2)[:500], "...")  # truncate for readability
+                print(json.dumps(camera_dict, indent=2)[:500], "...")  # truncated for readability
 
                 # Optionally, save full JSON as proof‑of‑concept
                 test_path = os.path.join(self.path, f"{camera.name}_dump.json")
@@ -140,8 +139,22 @@ class Git:
                     json.dump(camera_dict, f, indent=2)
                 print(f"[CozyStudio] Serialized camera data written to {test_path}")
 
+                # --- Deserialization test ----------------------------------------
+                print(f"[CozyStudio] Testing deserialization of camera from {test_path}")
+
+                with open(test_path, "r") as f:
+                    camera_data = json.load(f)
+
+                # Use bpy_protocol to deserialize it back into Blender
+                restored_camera = self.bpy_protocol.construct(camera_data)
+                self.bpy_protocol.load(camera_data, restored_camera)
+
+                print(f"[CozyStudio] Deserialized camera created: {restored_camera}")
+                if hasattr(restored_camera, "name"):
+                    print(f"[CozyStudio] Restored camera name: {restored_camera.name}")
+
             except Exception as ex:
-                print(f"[CozyStudio] Error serializing camera: {ex}")
+                print(f"[CozyStudio] Error during camera (de)serialization test: {ex}")
 
         else:
             print("[CozyStudio] No cameras available for serialization test.")
