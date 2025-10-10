@@ -1,9 +1,9 @@
 # Blender Data Block Serialization
-This library is curtisy of [Swann Martinez](https://gitlab.com/slumber), taken from his blender addon [multi-user](https://gitlab.com/slumber/multi-user/-/tree/master/multi_user/bl_types?ref_type=heads).
+This library is courtesy of [Swann Martinez](https://gitlab.com/slumber),  extracted from his Blender addon [multi-user](https://gitlab.com/slumber/multi-user/-/tree/master/multi_user/bl_types?ref_type=heads).
 
-The goal of pulling this out into it's own library is to make an independent blender data block serialization library so that blender data blocks can be stored, transimitted, and modified in a way that is serializable and deserializable back into a .blend file. This library can allow for far more advanced applications and manipluations of data blocks.
+The goal of pulling this out into it's own library is to make an independent blender data block serialization library so that blender data blocks can be stored, transmitted, and modified in a way that is serializable and deserializable back into a .blend file. This library can allow for far more advanced applications and manipulations of data blocks.
 
-Right now, bl_types runs on it's own without any dependencies. slubmers original implementation used a python library written for replicating data called [replication](https://gitlab.com/slumber/replication), powering the multi-user addon. bl_types uses a couple of classes to define methods for each bl_type, and a couple other helpers from from the replication library, so I've ripped those out and placed them into /bl_types/replicate.
+Right now, bl_types runs on it's own without any dependencies. Slumber's original implementation used a python library written for replicating data called [replication](https://gitlab.com/slumber/replication), powering the multi-user addon. bl_types uses a couple of classes to define methods for each bl_type, and a couple other helpers from from the replication library, so I've ripped those out and placed them into /bl_types/replicate.
 
 I've disabled some features using the "deepdiff" library, this is just for testing, for the purposes of cozystudio_addon and our data block based git implementation I'm not sure we'll be needing this functionality. But I've left the commented code in here so that eventually we can build a library that can be merged back into multi-user so that we can abstract this logic into it's own library.
 
