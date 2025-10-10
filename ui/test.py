@@ -31,6 +31,7 @@ class COZYSTUDIO_OT_PrintOperator(bpy.types.Operator):
             return {'CANCELLED'}
 
         git_instance.init()
+        git_instance.commit()
         return {'FINISHED'}
 
 

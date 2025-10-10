@@ -46,9 +46,30 @@ For storing data blocks in git lfs, look into blender data writing, storing data
 blend file is the current version of the data blocks listed in manifest, then pull from that blend file to build the blender file at a
 given git commit hash for the manifest.
 
+We hook into git, we update .blend file blobs of data blocks in git lfs with new commits from blender.
+
+When the user clicks the commit button, we take the new data blocks, save them to .blend files, and commit it to the git repo/lfs for storage while also recording the new data block associations in the cozystudio.json manifest file.
+
+This way we use git for version control and .blend file commit tracking so we dont have to do that manually. The only thing the cozy studio addon has to do is pipe blender data blocks to new .blend files, record them in the manifest,
+and when we change to a previous commit, rebuild the .blend file using the data blocks of the manifest in that commit hash.
+
+
+To test:
+1. Create a git repo, with a blend file. We init it with the cozystudio.json manifest
+2. Add and comit everything to the repo, cube example file.
+3. remove/change the cube out for a cone. Commit "Adding Cone" commit".
+4. change the current checkedout branch in git to the initial commit. CozyStudio automatically swaps out the data blocks to replicate the ones we stored in the initial commit within the current blender file.
+
+
+Obviously we would have to replicate some kind of stashing feature, similar to what git has, but I'm assuming it would just use the
+functionality we would build out in the above anyway. Just with some wiring to hook up.
+
+
 
 Future:
 Need still: Some lightweight diffing system, looks at tracked blender type properties to simply tell the user "Object was moved from xyz to xyz"
+
+
 """
 import os
 import bpy
@@ -56,16 +77,13 @@ import json
 import hashlib
 
 from ..core.track import Track
+# from ..core.bl_types import bl_types
+# from ..multi_user.bl_types import bl_types
+from .. import bl_types
+from ._bl_types import _bl_types
 
-TRACKABLE_TYPES = {  # just some basic examples.
-    "objects": ["location", "rotation_euler", "scale", "data", "material_slots"],
-    "meshes": ["vertices", "edges", "polygons"],
-    "materials": ["diffuse_color", "use_nodes", "node_tree"],
-    "lights": ["color", "energy", "type"],
-    "cameras": ["lens", "sensor_width", "sensor_height"],
-    "collections": ["hide_render", "hide_select", "hide_viewport"],
-    "scenes": ["frame_start", "frame_end", "render"],
-}
+# import importlib
+# bl_types = importlib.import_module(".multi_user.bl_types")
 
 
 class Git:
@@ -73,26 +91,97 @@ class Git:
         track = Track()
         track.start()
 
-        self.current_state = self.current()
         self.filepath = bpy.data.filepath
         self.path = bpy.path.abspath("//")
+        self.blockspath = os.path.join(self.path, ".blocks")
         
+        self.bpy_protocol = bl_types.get_data_translation_protocol()
+        print("THIS IS THING:", self.bpy_protocol)
 
     def init(self):
         """
         TODO: trigger modal popup: "Create blender git in /path/to/files/folder? This folder will become your
         project folder, all changes in this folder will be tracked."
         """
-        self.current_state = self.current()
+        # Maybe only do this step on commit:
 
-        with open(os.path.join(self.path, "cozystudio.json"), "w") as json_file:
-            json.dump(self.current_state, json_file, indent=4)
+        # Create .blend data blocks folder:
+        if not os.path.isdir(self.blockspath):
+            os.mkdir(self.blockspath)
+
+    def commit(self):
+        """Commit current state and run a quick serialization test."""
+        current_state = self.current()
+
+        manifest_path = os.path.join(self.path, "cozystudio.json")
+        with open(manifest_path, "w") as json_file:
+            json.dump(current_state, json_file, indent=4)
+
+        # Write out .blend blobs as before
+        for block in current_state:
+            self.write(block)
+
+        # --- Simple test of bpy_protocol serialization ---------------------
+        # Make sure we actually have a Camera in the file
+        if bpy.data.cameras:
+            camera = bpy.data.cameras[0]
+            print(f"[CozyStudio] Testing serialization of camera: {camera.name}")
+
+            # Serialize this datablock using the Multi‑User protocol
+            try:
+                camera_dict = self.bpy_protocol.dump(camera)
+
+                # For demonstration, print a small portion and optionally write to disk
+                print(json.dumps(camera_dict, indent=2)[:500], "...")  # truncate for readability
+
+                # Optionally, save full JSON as proof‑of‑concept
+                test_path = os.path.join(self.path, f"{camera.name}_dump.json")
+                with open(test_path, "w") as f:
+                    json.dump(camera_dict, f, indent=2)
+                print(f"[CozyStudio] Serialized camera data written to {test_path}")
+
+            except Exception as ex:
+                print(f"[CozyStudio] Error serializing camera: {ex}")
+
+        else:
+            print("[CozyStudio] No cameras available for serialization test.")
+
+    def write(self, block):
+        """
+        Writes a data-block to a .blend file, using it's uuid as it's name.
+        
+        TODO: Long term future: some kind of data-block serialization that converts data blocks to json and back to data-block types.
+        
+        
+        """
+        blend_path = os.path.join(self.blockspath, f"{block['cozystudio_uuid']}.blend")
+        os.makedirs(self.blockspath, exist_ok=True)
+
+        collection = getattr(bpy.data, block["type"], None)
+        if not collection:
+            print(f"No data collection {block['type']}")
+            return
+
+        target = next((db for db in collection if getattr(db, "cozystudio_uuid", None) == block["cozystudio_uuid"]), None)
+        if target:
+            bpy.data.libraries.write(blend_path, {target})
+        else:
+            print(f"Datablock with uuid {block['cozystudio_uuid']} not found.")
+
+    def load(self):
+        """
+        Loads a data-block from a .blend file into the current blend file.
+
+        TODO:
+        with bpy.data.libraries.load("my_mesh.blend") as (data_from, data_to):
+            data_to.meshes = data_from.meshes
+        """
 
     @staticmethod
     def db_hash(db, tracked_props=None):
         """
         Return a hash over an explicit or generic set of properties for a data block.
-        
+
         Used as a lightweight way to track if changes were made to data blocks.
         """
         h = hashlib.sha1()
@@ -133,9 +222,14 @@ class Git:
     def current(self):
         """Return list of trackable datablock summaries for the current blend."""
         blocks = []
-        for data_type, props in TRACKABLE_TYPES.items():
+
+        for entry in _bl_types:
+            data_type = entry["name"]
+            props = entry.get("properties", [])
+
             if not hasattr(bpy.data, data_type):
                 continue
+
             data_collection = getattr(bpy.data, data_type)
             if not isinstance(data_collection, bpy.types.bpy_prop_collection):
                 continue
@@ -148,9 +242,13 @@ class Git:
                     {
                         "type": data_type,
                         "name": db.name,
-                        "name_full": db.name_full,
-                        "cozystudio_uuid": db.cozystudio_uuid,
-                        "hash": self.db_hash(db, props),
+                        "name_full": getattr(db, "name_full", db.name),
+                        "cozystudio_uuid": getattr(
+                            db, "cozystudio_uuid", None
+                        ),  # uuid for tracking in blender file block with lfs blocks
+                        "hash": self.db_hash(
+                            db, props
+                        ),  # hash for checking if it's changed
                     }
                 )
 
