@@ -74,16 +74,19 @@ Need still: Some lightweight diffing system, looks at tracked blender type prope
 import os
 import bpy
 import json
+import base64
 import hashlib
+import traceback
 
 from ..core.track import Track
-# from ..core.bl_types import bl_types
-# from ..multi_user.bl_types import bl_types
 from .. import bl_types
-from ._bl_types import _bl_types
 
-# import importlib
-# bl_types = importlib.import_module(".multi_user.bl_types")
+
+def default_json_encoder(obj):
+    if isinstance(obj, bytes):
+        # Base64 encode bytes → safe text representation
+        return base64.b64encode(obj).decode("ascii")
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 class Git:
@@ -94,9 +97,12 @@ class Git:
         self.filepath = bpy.data.filepath
         self.path = bpy.path.abspath("//")
         self.blockspath = os.path.join(self.path, ".blocks")
-        
+
         self.bpy_protocol = bl_types.get_data_translation_protocol()
         print("THIS IS THING:", self.bpy_protocol)
+
+        for type_name, impl_class in self.bpy_protocol.implementations.items():
+            print(type_name, "→", impl_class)
 
     def init(self):
         """
@@ -121,65 +127,33 @@ class Git:
         for block in current_state:
             self.write(block)
 
-        # --- Simple test of bpy_protocol serialization ---------------------
-        if bpy.data.cameras:
-            camera = bpy.data.cameras[0]
-            print(f"[CozyStudio] Testing serialization of camera: {camera.name}")
-
-            try:
-                # Serialize this datablock using the Multi‑User protocol
-                camera_dict = self.bpy_protocol.dump(camera)
-
-                # For demonstration, print a small portion and optionally write to disk
-                print(json.dumps(camera_dict, indent=2)[:500], "...")  # truncated for readability
-
-                # Optionally, save full JSON as proof‑of‑concept
-                test_path = os.path.join(self.path, f"{camera.name}_dump.json")
-                with open(test_path, "w") as f:
-                    json.dump(camera_dict, f, indent=2)
-                print(f"[CozyStudio] Serialized camera data written to {test_path}")
-
-                # --- Deserialization test ----------------------------------------
-                print(f"[CozyStudio] Testing deserialization of camera from {test_path}")
-
-                with open(test_path, "r") as f:
-                    camera_data = json.load(f)
-
-                # Use bpy_protocol to deserialize it back into Blender
-                restored_camera = self.bpy_protocol.construct(camera_data)
-                self.bpy_protocol.load(camera_data, restored_camera)
-
-                print(f"[CozyStudio] Deserialized camera created: {restored_camera}")
-                if hasattr(restored_camera, "name"):
-                    print(f"[CozyStudio] Restored camera name: {restored_camera.name}")
-
-            except Exception as ex:
-                print(f"[CozyStudio] Error during camera (de)serialization test: {ex}")
-
-        else:
-            print("[CozyStudio] No cameras available for serialization test.")
-
     def write(self, block):
         """
         Writes a data-block to a .blend file, using it's uuid as it's name.
-        
-        TODO: Long term future: some kind of data-block serialization that converts data blocks to json and back to data-block types.
-        
-        
         """
-        blend_path = os.path.join(self.blockspath, f"{block['cozystudio_uuid']}.blend")
-        os.makedirs(self.blockspath, exist_ok=True)
 
         collection = getattr(bpy.data, block["type"], None)
         if not collection:
             print(f"No data collection {block['type']}")
             return
 
-        target = next((db for db in collection if getattr(db, "cozystudio_uuid", None) == block["cozystudio_uuid"]), None)
-        if target:
-            bpy.data.libraries.write(blend_path, {target})
-        else:
-            print(f"Datablock with uuid {block['cozystudio_uuid']} not found.")
+        target = next(
+            (
+                db
+                for db in collection
+                if getattr(db, "cozystudio_uuid", None) == block["cozystudio_uuid"]
+            ),
+            None,
+        )
+        data = self.bpy_protocol.dump(target)
+        try:
+            with open(
+                os.path.join(self.blockspath, f"{block['cozystudio_uuid']}.json"), "w"
+            ) as f:
+                json.dump(data, f, indent=2, default=default_json_encoder)
+        except Exception as e:
+            print(traceback.format_exc())
+            print(data)
 
     def load(self):
         """
@@ -233,17 +207,18 @@ class Git:
         return h.hexdigest()
 
     def current(self):
-        """Return list of trackable datablock summaries for the current blend."""
+        """
+        Return list of trackable datablock summaries for the current blend.
+
+        Uses a simple hashing to detect later on in the pipe if blocks have changed.
+        """
         blocks = []
 
-        for entry in _bl_types:
-            data_type = entry["name"]
-            props = entry.get("properties", [])
-
-            if not hasattr(bpy.data, data_type):
+        for type_name, impl_class in self.bpy_protocol.implementations.items():
+            if not hasattr(bpy.data, impl_class.bl_id):
                 continue
 
-            data_collection = getattr(bpy.data, data_type)
+            data_collection = getattr(bpy.data, impl_class.bl_id)
             if not isinstance(data_collection, bpy.types.bpy_prop_collection):
                 continue
 
@@ -251,17 +226,24 @@ class Git:
                 if hasattr(db, "users") and db.users == 0:
                     continue
 
+                # serilalize to json, hash, don't store json (maybe in the future cache somewhere so we are not duplicating this step)
+                #
+                data = self.bpy_protocol.dump(db)
+                json_string = json.dumps(data, default=default_json_encoder)
+                encoded_string = json_string.encode("utf-8")
+                hash_object = hashlib.sha256(encoded_string)
+                hex_digest = hash_object.hexdigest()
+
                 blocks.append(
                     {
-                        "type": data_type,
-                        "name": db.name,
-                        "name_full": getattr(db, "name_full", db.name),
+                        "type": impl_class.bl_id,
+                        "name": getattr(db, "name", None),
+                        "name_full": getattr(db, "name_full", None),
+                        # ^ for debugging, probably want to remove once implementation is finished.
                         "cozystudio_uuid": getattr(
                             db, "cozystudio_uuid", None
                         ),  # uuid for tracking in blender file block with lfs blocks
-                        "hash": self.db_hash(
-                            db, props
-                        ),  # hash for checking if it's changed
+                        "hash": hex_digest,
                     }
                 )
 
