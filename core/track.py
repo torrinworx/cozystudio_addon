@@ -8,7 +8,6 @@ class Track:
     """
 
     def __init__(self, bpy_protocol):
-        self.uuids = set()
         self.uuids_index = {}
         self.owners = []
         self.bpy_protocol = bpy_protocol
@@ -61,10 +60,6 @@ class Track:
 
     def unsubscribe(self, owner):
         bpy.msgbus.clear_by_owner(owner)
-
-    def find_by_uuid(self, uid):
-        """Return datablock reference for a given UUID, or None."""
-        return self.uuids_index.get(uid, None)
 
     def start(self):
         """
