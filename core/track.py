@@ -39,6 +39,11 @@ class Track:
                 default="", options={"HIDDEN"}
             )
 
+        if not hasattr(bpy.types.ID, "uuid"):
+            bpy.types.ID.uuid = bpy.props.StringProperty(
+                default="", options={"HIDDEN", "SKIP_SAVE"}
+            )
+
     def subscribe(self, bl_type):
         """Subscribe to msgbus for specific data block creation."""
         owner = object()
