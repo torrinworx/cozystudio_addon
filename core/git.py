@@ -70,6 +70,29 @@ Future:
 Need still: Some lightweight diffing system, looks at tracked blender type properties to simply tell the user "Object was moved from xyz to xyz"
 
 
+
+Notes:
+.blocks/uuids.json files store the raw data blocks in individualized json files. not sure how we resolve these
+data blocks to their dependents or their dependencies yet, need to research how multi-user does it.
+
+cozystudio.json file, this is simply used to detect diffs between currently commited data blocks in the local repo,
+with the current state of data blocks in blender.
+
+I'm unsure if using the cozystudio.json file to diff is a good idea, or how we should run the diffing so that
+new changes appear in the ui or how often, should we watch depsgraph for updates and run it then? how should
+we handle this?
+
+
+Need to create a system so that the user can add assets to git lfs in adition to the .blocks folder.
+
+Also how do we handle .blend files? How do we store or build them? Should we commit a light weight empty .blend
+file? so on a fresh clone  you pull a blank .blend file stored in lfs, that way we aren't multiplying .blend files
+that one stays the same, then the current data blocks in .blocks are loaded to recreate the file? something like that?
+
+flow:
+init repo, git, lfs, then commit current data blocks and blank .blend file to git lfs, while committing cozystudio.json
+manifest of current data blocks being stored, 
+
 """
 import os
 import bpy
@@ -77,9 +100,10 @@ import json
 import base64
 import hashlib
 import traceback
+from pathlib import Path
 
-from ..core.track import Track
 from .. import bl_types
+from ..core.track import Track
 
 
 def default_json_encoder(obj):
@@ -91,25 +115,22 @@ def default_json_encoder(obj):
 
 class Git:
     def __init__(self):
-        track = Track()
+        self.bpy_protocol = bl_types.get_data_translation_protocol()
+
+        track = Track(self.bpy_protocol)
         track.start()
 
         self.filepath = bpy.data.filepath
         self.path = bpy.path.abspath("//")
         self.blockspath = os.path.join(self.path, ".blocks")
 
-        self.bpy_protocol = bl_types.get_data_translation_protocol()
-        print("THIS IS THING:", self.bpy_protocol)
-
-        for type_name, impl_class in self.bpy_protocol.implementations.items():
-            print(type_name, "→", impl_class)
-
     def init(self):
         """
         TODO: trigger modal popup: "Create blender git in /path/to/files/folder? This folder will become your
         project folder, all changes in this folder will be tracked."
+        
+        Initiates the git repository
         """
-        # Maybe only do this step on commit:
 
         # Create .blend data blocks folder:
         if not os.path.isdir(self.blockspath):
@@ -155,14 +176,57 @@ class Git:
             print(traceback.format_exc())
             print(data)
 
-    def load(self):
+    def load(self, block_path):
         """
-        Loads a data-block from a .blend file into the current blend file.
-
-        TODO:
-        with bpy.data.libraries.load("my_mesh.blend") as (data_from, data_to):
-            data_to.meshes = data_from.meshes
+        Loads a data-block from a .json file into the current .blend file.
+        
+        NOTE: Might want to look into data-block dependency resolution here.
+        
+        NOTE: Also not sure how we can fully restore a data-block without having
+        to manually recreate each object it's assigned to? Hopefully there is some
+        abstracted method. How does multi-user handle creating new objects in a 
+        remote scene that didn't have an existing data block to append it to? Does
+        it have a method or protocal to build the objects in the scene that I can 
+        just use/borrow so that I dont have to go bpy.
         """
+    def load_datablock_from_json(self, block_path):
+        """Generic loader that restores a datablock from dumped JSON data.
+        
+        Args:
+            json_path (str or Path): Path to the stored JSON datablock dump.
+            bpy_protocol (DataTranslationProtocol): The protocol with registered implementations.
+        
+        Returns:
+            bpy.types.ID: The reloaded datablock instance (new or existing)
+        """
+        json_path = Path(block_path)
+        if not json_path.exists():
+            raise FileNotFoundError(f"Data file not found: {block_path}")
+        
+        # Load serialized datablock data
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        type_id = data.get("type_id")
+        if not type_id:
+            raise ValueError("Invalid datablock: missing 'type_id' field")
+        
+        # Find the registered ReplicatedDatablock implementation
+        impl = self.bpy_protocol.get_implementation(type_id)
+        if not impl:
+            raise ValueError(f"No registered implementation found for {type_id}")
+        
+        # Try to resolve existing datablock first (by UUID for example)
+        datablock = impl.resolve(data)
+        
+        if datablock is None:
+            # If not found, construct a new one
+            datablock = impl.construct(data)
+        
+        # Finally load the data into the datablock (sets all attributes)
+        impl.load(data, datablock)
+        
+        return datablock
 
     @staticmethod
     def db_hash(db, tracked_props=None):

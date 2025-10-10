@@ -1,26 +1,24 @@
 import bpy
 import uuid
 
-from ..core._bl_types import _bl_types
-
-
 class Track:
     """
     Handles tracking of bl_types. Assignes uuids to specific blender data blocks so that depsgraph can
     be parsed more efficiently.
     """
 
-    def __init__(self):
+    def __init__(self, bpy_protocol):
         self.uuids = set()
         self.uuids_index = {}
         self.owners = []
+        self.bpy_protocol = bpy_protocol
 
     @staticmethod
     def _assign(uuids, uuids_index, bl_type):
         """
         Assign uuids to all datablocks of the given Blender type.
         """
-        coll = getattr(bpy.data, f"{bl_type['name']}", None)
+        coll = getattr(bpy.data, bl_type.bl_id, None)
         if not coll:
             return
 
@@ -38,17 +36,18 @@ class Track:
             bpy.types.ID.cozystudio_uuid = bpy.props.StringProperty(
                 default="", options={"HIDDEN"}
             )
-
         if not hasattr(bpy.types.ID, "uuid"):
             bpy.types.ID.uuid = bpy.props.StringProperty(
-                default="", options={"HIDDEN", "SKIP_SAVE"}
+                default="", options={"HIDDEN"}
             )
 
     def subscribe(self, bl_type):
         """Subscribe to msgbus for specific data block creation."""
         owner = object()
         self.owners.append(owner)
-        subscribe_to = (bpy.types.BlendData, bl_type["name"])
+        if not hasattr(bpy.types.BlendData, bl_type.bl_id):
+            return
+        subscribe_to = (bpy.types.BlendData, bl_type.bl_id)
 
         bpy.msgbus.subscribe_rna(
             key=subscribe_to,
@@ -58,7 +57,7 @@ class Track:
             options={"PERSISTENT"},
         )
 
-        bpy.msgbus.publish_rna(key=(bpy.types.BlendData, bl_type["name"]))
+        bpy.msgbus.publish_rna(key=subscribe_to)
 
     def unsubscribe(self, owner):
         bpy.msgbus.clear_by_owner(owner)
@@ -76,9 +75,9 @@ class Track:
         """
         self._property()
 
-        for t in _bl_types:
-            self._assign(self.uuids, self.uuids_index, t)
-            self.subscribe(t)
+        for type_name, impl_class in self.bpy_protocol.implementations.items():
+            self._assign(self.uuids, self.uuids_index, impl_class)
+            self.subscribe(impl_class)
 
     def stop(self):
 
