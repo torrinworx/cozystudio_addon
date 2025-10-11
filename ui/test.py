@@ -4,47 +4,44 @@ from bpy.app.handlers import persistent
 
 git_instance = None
 
-class COZYSTUDIO_OT_SavePrompt(bpy.types.Operator):
-    """Ask user to save the file before continuing"""
-    bl_idname = "cozystudio.save_prompt"
-    bl_label = "Save Blend File Required"
-
-    def execute(self, context):
-        bpy.ops.wm.save_mainfile('INVOKE_DEFAULT')
-        self.report({'INFO'}, "Please save your .blend file before continuing.")
-        return {'CANCELLED'}
-
-    def invoke(self, context, event):
-        wm = context.window_manager
-        return wm.invoke_confirm(self, event)
-
-
-class COZYSTUDIO_OT_PrintOperator(bpy.types.Operator):
-    bl_idname = "cozystudio.compare"
-    bl_label = "Compare"
+class INIT_OT_PrintOperator(bpy.types.Operator):
+    bl_idname = "cozystudio.init_repo"
+    bl_label = "Init"
 
     def execute(self, context):
         global git_instance
 
         if not bpy.data.filepath:
-            bpy.ops.cozystudio.save_prompt('INVOKE_DEFAULT')
-            return {'CANCELLED'}
+            bpy.ops.cozystudio.save_prompt("INVOKE_DEFAULT")
+            return {"CANCELLED"}
 
         git_instance.init()
+        return {"FINISHED"}
+
+
+class COMMMIT_OT_PrintOperator(bpy.types.Operator):
+    bl_idname = "cozystudio.commit"
+    bl_label = "Compare"
+
+    def execute(self, context):
+        global git_instance
+
         git_instance.commit()
-        return {'FINISHED'}
+        return {"FINISHED"}
 
 
-class COZYSTUDIO_PT_Panel(bpy.types.Panel):
+class MAIN_PT_Panel(bpy.types.Panel):
     bl_label = "Cozy Studio"
     bl_idname = "COZYSTUDIO_PT_panel"
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'UI'
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
     bl_category = "Cozy Studio"
 
     def draw(self, context):
         layout = self.layout
-        layout.operator("cozystudio.compare", text="Git Compare Test")
+        layout.operator("cozystudio.init_repo", text="Init")
+        layout.operator("cozystudio.commit", text="Commit")
+
 
 def is_data_restricted():
     try:
@@ -60,13 +57,14 @@ def check_and_init_git():
     if is_data_restricted():
         # Still restricted, reschedule to try again in 0.5 seconds
         return 0.5
-    
+
     elif bpy.data.filepath == "":
         git_instance = None
         return None
 
     git_instance = Git()
     return None
+
 
 @persistent
 def init_git_on_load(_dummy=None):
