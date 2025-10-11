@@ -34,7 +34,7 @@ class WriteDict(dict):
                 data = json.load(f)
             
             # if file exists and data is also provided, raise exception
-            if data is not None:
+            if data:
                 raise FileExistsError(
                     f"JSON file '{self.path}' already exists. "
                     "Initial data should not be provided."
