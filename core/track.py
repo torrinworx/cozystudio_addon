@@ -8,12 +8,14 @@ class Track:
     """
 
     def __init__(self, bpy_protocol):
+        # We keep track of these two internally but don't use them internally, might be useful later? idk
         self.uuids_index = {}
         self.owners = []
+        
         self.bpy_protocol = bpy_protocol
 
     @staticmethod
-    def _assign(uuids, uuids_index, bl_type):
+    def _assign(uuids_index, bl_type):
         """
         Assign uuids to all datablocks of the given Blender type.
         """
@@ -27,7 +29,6 @@ class Track:
                 uid = str(uuid.uuid4())
                 idb.cozystudio_uuid = uid
 
-            uuids.add(uid)
             uuids_index[uid] = idb
 
     def _property(self):  # Assign property to every bl type.
@@ -71,7 +72,7 @@ class Track:
         self._property()
 
         for type_name, impl_class in self.bpy_protocol.implementations.items():
-            self._assign(self.uuids, self.uuids_index, impl_class)
+            self._assign(self.uuids_index, impl_class)
             self.subscribe(impl_class)
 
     def stop(self):
