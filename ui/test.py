@@ -4,6 +4,7 @@ from bpy.app.handlers import persistent
 
 git_instance = None
 
+
 class INIT_OT_PrintOperator(bpy.types.Operator):
     bl_idname = "cozystudio.init_repo"
     bl_label = "Init"
@@ -57,10 +58,6 @@ def check_and_init_git():
     if is_data_restricted():
         # Still restricted, reschedule to try again in 0.5 seconds
         return 0.5
-
-    elif bpy.data.filepath == "":
-        git_instance = None
-        return None
 
     git_instance = Git()
     return None
