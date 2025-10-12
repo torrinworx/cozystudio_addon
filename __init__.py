@@ -16,7 +16,7 @@ import importlib
 import subprocess
 import threading
 
-IMPORT_NAME_MAP = {"GitPython": "git", "beautifulsoup4": "bs4"}
+IMPORT_NAME_MAP = {"GitPython": "git"}
 
 REQUIREMENTS_PATH = os.path.join(os.path.dirname(__file__), "requirements.txt")
 
@@ -122,7 +122,6 @@ class COZYSTUDIO_OT_install_deps(bpy.types.Operator):
                         auto_load.register()
                         global auto_load_was_registered
                         auto_load_was_registered = True
-                        print("[CozyStudio] auto_load registered after install.")
                     except ImportError:
                         pass  # auto_load not found
 
@@ -166,9 +165,10 @@ def register():
             auto_load.init()
             auto_load.register()
             auto_load_was_registered = True
-            print("[CozyStudio] Dependencies ok, auto_load registered.")
         except ImportError:
             pass  # auto_load not found, skipping registration.
+        except Exception as e:
+            print("[CozyStudio] Error in auto_load.register:", e)
 
 
 def unregister():
