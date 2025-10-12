@@ -1,61 +1,38 @@
 import json
 from pathlib import Path
 
+
 class WriteDict(dict):
     """
-    A dictionary wrapper that mirrors changes (writes) to a JSON file automatically on each update.
-    - Loads existing JSON file data if available.
-    - Writes only when updates occur (not when reading).
-    - Raises an error if both initial data is provided and data already exists at given path.
-    
-    Example:
-    ```python
-    # Creating a new synced dict
-    somedict = WriteDict('./cozystudio.json', {'name': 'Tom', 'age': '32'})
-    somedict.update({'email': 'tom@yahoo.com'}) # written to file
-
-    print(somedict['email'])  # prints: tom@yahoo.com
-
-    # Re-opening the same dict later
-    somedict2 = WriteDict('./cozystudio.json')
-    print(somedict2['email'])  # prints: tom@yahoo.com
-    ```
-    
-    a mini db.
+    A persistent dictionary that automatically syncs changes to a JSON file.
+    Loads existing JSON data if the file exists, or initializes new data otherwise.
     """
 
     def __init__(self, path, data=None):
         self.path = Path(path)
-        
-        # JSON file already exists
+
         if self.path.exists():
-            # Load existing data from file
-            with open(self.path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            # if file exists and data is also provided, raise exception
-            if data:
+            if data is not None:
                 raise FileExistsError(
                     f"JSON file '{self.path}' already exists. "
                     "Initial data should not be provided."
                 )
-
-            super().__init__(data)
-        
-        # File doesn’t exist, initialize with provided data or empty dict
+            with open(self.path, "r", encoding="utf-8") as f:
+                existing_data = json.load(f)
+            if not isinstance(existing_data, dict):
+                raise ValueError(f"JSON file '{self.path}' does not contain a dictionary.")
+            super().__init__(existing_data)
         else:
             super().__init__(data or {})
-            # Ensure directory exists before writing
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self._write_to_file()
 
     def _write_to_file(self):
-        """Write current dictionary state to JSON file"""
-        with open(self.path, 'w', encoding='utf-8') as f:
+        """Write current dictionary state to JSON file."""
+        with open(self.path, "w", encoding="utf-8") as f:
             json.dump(self, f, ensure_ascii=False, indent=2)
 
-    # Override modifying dict operations to automatically write changes
-
+    # --- dict modification overrides ---
     def __setitem__(self, key, value):
         super().__setitem__(key, value)
         self._write_to_file()
