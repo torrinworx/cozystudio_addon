@@ -1,5 +1,5 @@
 import bpy
-from ..core.git import Git
+from ..core.bpy_git import BpyGit
 from bpy.app.handlers import persistent
 
 git_instance = None
@@ -13,7 +13,7 @@ class INIT_OT_PrintOperator(bpy.types.Operator):
         global git_instance
 
         if not bpy.data.filepath:
-            bpy.ops.cozystudio.save_prompt("INVOKE_DEFAULT")
+            # bpy.ops.cozystudio.save_prompt("INVOKE_DEFAULT")
             return {"CANCELLED"}
 
         git_instance.init()
@@ -59,7 +59,7 @@ def check_and_init_git():
         # Still restricted, reschedule to try again in 0.5 seconds
         return 0.5
 
-    git_instance = Git()
+    git_instance = BpyGit()
     return None
 
 
