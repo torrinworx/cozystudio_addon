@@ -111,6 +111,8 @@ The protocol ensures that **every data block type** follows the same interface, 
 | `resolve_deps(datablock: bpy.types.ID) -> list[bpy.types.ID]` | Returns a list of other datablocks that this one depends on (images, actions, etc.). |
 
 #### **Optional Methods**
+These are not fully implemented in all bl_types, so they are not universally useful like the methods above.
+
 | Method | Description |
 | ------- | ------------ |
 | `needs_update(datablock, data) -> bool` | Allows for a "fast-check" to see if a datablock and its serialized state differ. Default always returns True. |
@@ -185,5 +187,3 @@ https://gitlab.com/slumber/multi-user/-/issues/65
 
 
 Another thing to note for cozystudio_addon is that we only check the data blocks in the class list, so we never have to worry about an unsupported data block from crashing our system, we just get updates based on the list provided by `implementations.items()`
-
-For cozyStudio_addon we can also use the `needs_update` method to check if there are diffs between current and stored instances of data json data blocks in .blocks. For displaying what actually changed to the user in a "Changes:" ui like in vscode, I'm gonna bet we can use `compute_delta` to display that information about a given data block we used `needs_update` on to detect if it's changed instead of manually hashing things like I'm currently doing in git.py.
