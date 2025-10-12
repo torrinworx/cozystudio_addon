@@ -120,12 +120,12 @@ import base64
 import traceback
 from pathlib import Path
 from collections import defaultdict, deque
-
-from git import Repo
+from git import Repo, InvalidGitRepositoryError, NoSuchPathError
 
 from .. import bl_types
 from .track import Track
-from ..utils.write_dict import WriteDict
+# from ..utils.write_dict import WriteDict
+from ..utils.write_list import WriteList
 
 
 def default_json_encoder(obj):
@@ -137,39 +137,79 @@ def default_json_encoder(obj):
 
 class BpyGit:
     def __init__(self):
+        """
+        Checks the current path, tries to load an exisitng bpy_git repo.
+        
+        This doesn't try to rectify or start a bpy_git repo as this code
+        is loaded on blender startup. This only attempts to load a 
+        bpy_git repo if one can be found. The user must manually initate
+        one with BpyGit.init(). That handles file creation and folder
+        creation and git initialization.
+        """
         self.bpy_protocol = bl_types.get_data_translation_protocol()
         Track(self.bpy_protocol).start()
 
-        self.path = Path(bpy.path.abspath("//"))  # Blender file folder
+        self.path = Path(bpy.path.abspath("//")).resolve()
         self.blockspath = Path(os.path.join(self.path, ".blocks"))
         self.manifestpath = Path(os.path.join(self.path, "cozystudio.json"))
+
+        self.repo = None
         self.manifest = None
         self.initiated = False
 
-        # TODO: proper check if repo is initiated using py git or whatever library.
-        if (
-            self.path.exists()
-            and not self.path == ""
-            and self.blockspath.exists()
-            and self.manifestpath.exists()
-        ):
-            self.initiated = True
+        if str(self.path) == "" or not self.path.exists():
+            # Blender file is not saved yet. Save before using Git features. - TODO Add warning in blender
+            return
 
-        if self.initiated:
-            self.manifest = WriteDict(self.manifestpath)
+        try:
+            self.repo = Repo(self.path, search_parent_directories=True)
+            if self.repo.bare:
+                self.repo = None  # No repo found at current blender file
+            else:
+                self.initiated = True  # Repo found at current blender file
+
+        except (InvalidGitRepositoryError, NoSuchPathError):
+            # TODO: Warning in blender: No valid Git repository detected in {self.path}
+            self.repo = None
+            self.initiated = False
+            # Do not auto-create anything — following the design requirement
+            return
+        except Exception as e:
+            print(f"[BpyGit] Unexpected error while initializing git: {e}")
+            print(traceback.format_exc())
+            self.repo = None
+            self.initiated = False
+            return
+
+        try:
+            if self.manifestpath.exists():
+                # Load existing manifest
+                self.manifest = WriteList(self.manifestpath)
+            
+            # only loading an existing one here, initiating one is handled in self.init()
+        except Exception as e:
+            print(f"[BpyGit] Error loading manifest: {e}")
+            print(traceback.format_exc())
+            self.manifest = None
 
     def init(self):
         """
+        Initiates a bpy_git repo in the current blender file path.
+        
+        This function checks that __init___ hasn't already loaded
+        a git repo.
+
         TODO: trigger modal popup: "Create blender git in /path/to/files/folder? This folder will become your
         project folder, all changes in this folder will be tracked."
-
-        Initiates the git repository
         """
 
-        if not os.path.isdir(self.blockspath):
-            os.mkdir(self.blockspath)
+        if not self.initiated:
+            if not os.path.isdir(self.blockspath):
+                os.mkdir(self.blockspath)
 
-        self.manifest = WriteDict(self.manifestpath)
+            self.manifest = WriteList(self.manifestpath)
+            self.repo = Repo.init(self.path)
+            self.initiated = True
 
     def commit(self):
         """Commit current state and run a quick serialization test."""
@@ -193,7 +233,6 @@ class BpyGit:
         """
         Returns the serialized dictionary of a single data block.
         """
-
         collection = getattr(bpy.data, block["type"], None)
         if not collection:
             print(f"No data collection {block['type']}")
@@ -330,6 +369,7 @@ class BpyGit:
 
                 blocks.append(
                     {
+                        "type": impl_class.bl_id,
                         "cozystudio_uuid": getattr(db, "cozystudio_uuid", None),
                         "deps": deps,
                         # TODO: bring back a hashing thing so we can diff based on a simple hash here.
