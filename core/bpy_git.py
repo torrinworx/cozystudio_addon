@@ -91,19 +91,41 @@ that one stays the same, then the current data blocks in .blocks are loaded to r
 
 flow:
 init repo, git, lfs, then commit current data blocks and blank .blend file to git lfs, while committing cozystudio.json
-manifest of current data blocks being stored, 
+manifest of current data blocks being stored,
+
+We never use WriteDict helper on data blocks themselves, just on the manifest. If we did it for each data block, we would
+use too much memory, blender already uses alot of memory so we don't want to duplicate this.
+
+WriteDict shouldn't be used for live updating data-blocks since that will be handled by a dedicated commit() function,
+we should only periodically be diffing the data blocks and the stored json committed data blocks occasionally.
+
+Design note: Maybe for simplicity sake we should bound togther data blocks and their dependencies? that might simplify some
+things? Idk what the trade offs are though.
+
+
+TASKS:
+- checkout function, reconstruct a given manifest file in the current blender file.
+- build and test topological dependency loading
+- import git python and use git functionality, hookup git init, commit, checkout features.
+- using git python, re-build and simplify __init__ function to check if the current directory has already been initialized.
+    ensure that the initialized repo also automatically loads the manifest WriteDict if it's there.
+
 
 """
+
 import os
 import bpy
 import json
 import base64
-import hashlib
 import traceback
 from pathlib import Path
+from collections import defaultdict, deque
+
+from git import Repo
 
 from .. import bl_types
-from ..core.track import Track
+from .track import Track
+from ..utils.write_dict import WriteDict
 
 
 def default_json_encoder(obj):
@@ -113,44 +135,63 @@ def default_json_encoder(obj):
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
-class Git:
+class BpyGit:
     def __init__(self):
         self.bpy_protocol = bl_types.get_data_translation_protocol()
+        Track(self.bpy_protocol).start()
 
-        track = Track(self.bpy_protocol)
-        track.start()
+        self.path = Path(bpy.path.abspath("//"))  # Blender file folder
+        self.blockspath = Path(os.path.join(self.path, ".blocks"))
+        self.manifestpath = Path(os.path.join(self.path, "cozystudio.json"))
+        self.manifest = None
+        self.initiated = False
 
-        self.filepath = bpy.data.filepath
-        self.path = bpy.path.abspath("//")
-        self.blockspath = os.path.join(self.path, ".blocks")
+        # TODO: proper check if repo is initiated using py git or whatever library.
+        if (
+            self.path.exists()
+            and not self.path == ""
+            and self.blockspath.exists()
+            and self.manifestpath.exists()
+        ):
+            self.initiated = True
+
+        if self.initiated:
+            self.manifest = WriteDict(self.manifestpath)
 
     def init(self):
         """
         TODO: trigger modal popup: "Create blender git in /path/to/files/folder? This folder will become your
         project folder, all changes in this folder will be tracked."
-        
+
         Initiates the git repository
         """
 
-        # Create .blend data blocks folder:
         if not os.path.isdir(self.blockspath):
             os.mkdir(self.blockspath)
+
+        self.manifest = WriteDict(self.manifestpath)
 
     def commit(self):
         """Commit current state and run a quick serialization test."""
         current_state = self.current()
 
-        manifest_path = os.path.join(self.path, "cozystudio.json")
-        with open(manifest_path, "w") as json_file:
+        # TODO: manifest api that on init creates manifest file, then is able to write individual blocks, should be included in write endpoint so we don't have to worry about this.
+        with open(self.manifestpath, "w") as json_file:
             json.dump(current_state, json_file, indent=4)
 
         # Write out .blend blobs as before
         for block in current_state:
             self.write(block)
 
-    def write(self, block):
+    def checkout(self, commit):
         """
-        Writes a data-block to a .blend file, using it's uuid as it's name.
+        checks out a given commit in the git repo and reconstructs the blender file data blocks using the
+        manifest at that commit.
+        """
+
+    def serialize(self, block):
+        """
+        Returns the serialized dictionary of a single data block.
         """
 
         collection = getattr(bpy.data, block["type"], None)
@@ -166,7 +207,38 @@ class Git:
             ),
             None,
         )
-        data = self.bpy_protocol.dump(target)
+        return self.bpy_protocol.dump(target)
+
+    def deserialize(self, data):
+        """ """
+        type_id = data.get("type_id")
+        if not type_id:
+            raise ValueError("Invalid datablock: missing 'type_id' field")
+
+        impl = self.bpy_protocol.get_implementation(type_id)
+
+        # Try to resolve existing datablock
+        datablock = impl.resolve(data)
+        if datablock:
+            # Compare current vs stored version
+            if self.needs_update(
+                datablock, data
+            ):  # TODO: build a custom differ for data block quick comparison.
+                impl.load(data, datablock)
+            # No update necessary for datablock
+
+        else:
+            # Build fresh
+            datablock = impl.construct(data)
+            impl.load(data, datablock)
+
+    def write(self, block):
+        """
+        Writes a data block to a .json file, using it's uuid as it's name.
+        """
+
+        data = self.serialize(block)
+
         try:
             with open(
                 os.path.join(self.blockspath, f"{block['cozystudio_uuid']}.json"), "w"
@@ -176,105 +248,68 @@ class Git:
             print(traceback.format_exc())
             print(data)
 
-    def load(self, block_path):
+    def read(self, cozystudio_uuid):
         """
-        Loads a data-block from a .json file into the current .blend file.
-        
-        NOTE: Might want to look into data-block dependency resolution here.
-        
-        NOTE: Also not sure how we can fully restore a data-block without having
-        to manually recreate each object it's assigned to? Hopefully there is some
-        abstracted method. How does multi-user handle creating new objects in a 
-        remote scene that didn't have an existing data block to append it to? Does
-        it have a method or protocal to build the objects in the scene that I can 
-        just use/borrow so that I dont have to go bpy.
+        Reads and returns the data of a serialized data block given a blocks cozystudio_uuid.
+
+        NOTES:
+
+        IMPORTANT: Read assumes that the data block no longer exists in the .blend file
+        it doesn't try to resolve to an existing data block, it constructs a new one and
+        it's dependencies from scratch.
+
+        block_entry looks like this:
+        {
+            "type": "scenes",
+            "name": "Scene",
+            "name_full": "Scene",
+            "cozystudio_uuid": "bc6b3df8-0e87-40fd-be4a-040c9927a299",
+            "deps": [
+                "b264c244-6853-4017-aac0-a86981fac218",
+                "189b95bf-f14e-40ca-b344-64c5a2a6cd8c"
+            ]
+        },
+
+        need to make sure that a datablock is constructed only after all the blocks it references (“dependencies”) exist in Blender
         """
-    def load_datablock_from_json(self, block_path):
-        """Generic loader that restores a datablock from dumped JSON data.
-        
-        Args:
-            json_path (str or Path): Path to the stored JSON datablock dump.
-            bpy_protocol (DataTranslationProtocol): The protocol with registered implementations.
-        
-        Returns:
-            bpy.types.ID: The reloaded datablock instance (new or existing)
-        """
-        json_path = Path(block_path)
-        if not json_path.exists():
+        block_path = self.blockspath / f"{cozystudio_uuid}.json"
+
+        if not block_path.exists():
             raise FileNotFoundError(f"Data file not found: {block_path}")
-        
-        # Load serialized datablock data
-        with open(json_path, 'r', encoding='utf-8') as f:
+
+        with open(block_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        
-        type_id = data.get("type_id")
-        if not type_id:
-            raise ValueError("Invalid datablock: missing 'type_id' field")
-        
-        # Find the registered ReplicatedDatablock implementation
-        impl = self.bpy_protocol.get_implementation(type_id)
-        if not impl:
-            raise ValueError(f"No registered implementation found for {type_id}")
-        
-        # Try to resolve existing datablock first (by UUID for example)
-        datablock = impl.resolve(data)
-        
-        if datablock is None:
-            # If not found, construct a new one
-            datablock = impl.construct(data)
-        
-        # Finally load the data into the datablock (sets all attributes)
-        impl.load(data, datablock)
-        
-        return datablock
 
-    @staticmethod
-    def db_hash(db, tracked_props=None):
-        """
-        Return a hash over an explicit or generic set of properties for a data block.
+        return data
 
-        Used as a lightweight way to track if changes were made to data blocks.
+    def topological_sort(manifest):
         """
-        h = hashlib.sha1()
-        if tracked_props:
-            for pname in tracked_props:
-                if not hasattr(db, pname):
-                    continue
-                try:
-                    value = getattr(db, pname)
-                    if isinstance(value, bpy.types.bpy_struct):
-                        h.update(f"{value.__class__.__name__}:{value.name}".encode())
-                    elif hasattr(value, "__iter__") and not isinstance(
-                        value, (str, bytes)
-                    ):
-                        joined = ",".join(
-                            str(v.name if hasattr(v, "name") else v) for v in value
-                        )
-                        h.update(joined.encode())
-                    else:
-                        h.update(str(value).encode())
-                except Exception:
-                    continue
-        else:
-            for prop in db.bl_rna.properties:
-                if prop.identifier in {"rna_type", "name", "users"}:
-                    continue
-                try:
-                    value = getattr(db, prop.identifier)
-                    if isinstance(
-                        value, (bpy.types.bpy_struct, bpy.types.bpy_prop_collection)
-                    ):
-                        continue
-                    h.update(str(value).encode("utf8"))
-                except Exception:
-                    continue
-        return h.hexdigest()
+        Sketch: Code for sorting manifest entries to build a dependency based order to load
+        data blocks of a given manifest.
+        """
+        deps = {e["cozystudio_uuid"]: set(e.get("deps", [])) for e in manifest}
+        reverse = defaultdict(set)
+        for k, vs in deps.items():
+            for v in vs:
+                reverse[v].add(k)
+
+        # Find roots (no dependencies)
+        roots = deque([k for k, ds in deps.items() if not ds])
+        order = []
+        while roots:
+            n = roots.popleft()
+            order.append(n)
+            for m in list(reverse[n]):
+                deps[m].remove(n)
+                if not deps[m]:
+                    roots.append(m)
+        if any(deps[k] for k in deps):
+            raise ValueError("Cycle detected in dependency graph")
+        return order
 
     def current(self):
         """
         Return list of trackable datablock summaries for the current blend.
-
-        Uses a simple hashing to detect later on in the pipe if blocks have changed.
         """
         blocks = []
 
@@ -290,24 +325,14 @@ class Git:
                 if hasattr(db, "users") and db.users == 0:
                     continue
 
-                # serilalize to json, hash, don't store json (maybe in the future cache somewhere so we are not duplicating this step)
-                #
-                data = self.bpy_protocol.dump(db)
-                json_string = json.dumps(data, default=default_json_encoder)
-                encoded_string = json_string.encode("utf-8")
-                hash_object = hashlib.sha256(encoded_string)
-                hex_digest = hash_object.hexdigest()
+                # Store deps of data blocks.
+                deps = [d.cozystudio_uuid for d in self.bpy_protocol.resolve_deps(db)]
 
                 blocks.append(
                     {
-                        "type": impl_class.bl_id,
-                        "name": getattr(db, "name", None),
-                        "name_full": getattr(db, "name_full", None),
-                        # ^ for debugging, probably want to remove once implementation is finished.
-                        "cozystudio_uuid": getattr(
-                            db, "cozystudio_uuid", None
-                        ),  # uuid for tracking in blender file block with lfs blocks
-                        "hash": hex_digest,
+                        "cozystudio_uuid": getattr(db, "cozystudio_uuid", None),
+                        "deps": deps,
+                        # TODO: bring back a hashing thing so we can diff based on a simple hash here.
                     }
                 )
 
