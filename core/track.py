@@ -28,6 +28,7 @@ class Track:
             if not uid:
                 uid = str(uuid.uuid4())
                 idb.cozystudio_uuid = uid
+                idb.uuid = uid
 
             uuids_index[uid] = idb
 
