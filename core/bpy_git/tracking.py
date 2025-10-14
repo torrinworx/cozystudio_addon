@@ -1,17 +1,19 @@
 import bpy
 import uuid
 
+from ...utils.timers import timers
+
 class Track:
     """
     Handles tracking of data blocks using bl types defined by bl_types by assigning uuids
     to them and subscribing to them if new ones appear so that new ones are assigned.
+    
+    BUG: new icosphere added doesn't have cozystudio_uuid for some reason?
     """
 
     def __init__(self, bpy_protocol):
         # We keep track of these two internally but don't use them internally, might be useful later? idk
-        self.uuids_index = {}
-        self.owners = []
-        
+        self.uuids_index = {}        
         self.bpy_types = bpy_protocol.implementations.items() # Only used to know which types to track.
 
     @staticmethod
@@ -27,6 +29,7 @@ class Track:
             uid = getattr(idb, "cozystudio_uuid", "")
             if not uid:
                 uid = str(uuid.uuid4())
+                print("NEW UUID: ", uid, idb)
                 idb.cozystudio_uuid = uid
                 idb.uuid = uid
 
@@ -42,26 +45,12 @@ class Track:
                 default="", options={"HIDDEN"}
             )
 
-    def subscribe(self, bl_type):
-        """Subscribe to msgbus for specific data block creation."""
-        owner = object()
-        self.owners.append(owner)
-        if not hasattr(bpy.types.BlendData, bl_type.bl_id):
-            return
-        subscribe_to = (bpy.types.BlendData, bl_type.bl_id)
-
-        bpy.msgbus.subscribe_rna(
-            key=subscribe_to,
-            owner=owner,
-            args=(self.uuids, self.uuids_index, bl_type),
-            notify=self._assign,
-            options={"PERSISTENT"},
-        )
-
-        bpy.msgbus.publish_rna(key=subscribe_to)
-
-    def unsubscribe(self, owner):
-        bpy.msgbus.clear_by_owner(owner)
+    def _run_assign_loop(self):
+        """Runs every ~0.5 sec and ensures new datablocks have UUIDs."""
+        for type_name, impl_class in self.bpy_types:
+            self._assign(self.uuids_index, impl_class)
+        # return interval → keeps looping
+        return 0.5
 
     def start(self):
         """
@@ -71,15 +60,5 @@ class Track:
             assign new uuids for new data blocks
         """
         self._property()
-
-        for type_name, impl_class in self.bpy_types:
-            self._assign(self.uuids_index, impl_class)
-            self.subscribe(impl_class)
-
-    def stop(self):
-
-        for owner in self.owners:
-            self.unsubscribe(owner)
-        self.owners.clear()
-        self.uuids.clear()
-        self.uuids_index.clear()
+        self._run_assign_loop()
+        timers.register(self._run_assign_loop, first_interval=0.5)
