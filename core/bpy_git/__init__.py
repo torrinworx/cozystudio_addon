@@ -97,6 +97,16 @@ files. This is separate from committing them to the repo, or even git adding the
 them, we can then just use git to show the difference between their current state freshly
 written from the blend file data blocks and the state already committed in the git repo.
 
+
+committing and adding to staging special cases we need to handle manually:
+- hide cozystudio.json from appearing in changes, this should always be committed when any staged changes are committed.
+    Caveat: non staged changes will still appear in this manifest, so we need to not commit the changed data block entries
+    in the manifest that havent been staged
+- Handle .blend and .blend1 files. We don't want to directly commit these, so my theory: we handle this manually, hide changes
+    to the .blend file in git from the user. Never commit them. on init we commit a blank shell .blend file that on launch with
+    our addon auto mounts the currently checked out commit in blender. Auto loading the datat blocks in .blocks at that commit.
+    So we never actually commit the .blend1 file, and never commit any new changes to the .blend file.
+
 """
 
 import os
@@ -216,6 +226,11 @@ class BpyGit:
             self.repo = Repo.init(self.path)
             self.initiated = True
             timers.register(self._check)
+    
+    def add(self, changes):
+        """
+        Git wrapper, add a list of files to staging.
+        """
 
 
     def _check(self):
@@ -241,14 +256,7 @@ class BpyGit:
         to compare and to write if needed.
         """
 
-        if not self.manifest:
-
-            # just for testing:
-            self.manifest.clear()
-            entries, blocks = self._current_state()
-            self.manifest.update(entries)       
-            
-            return 5
+        if not self.manifest: return 5
 
         entries, blocks = self._current_state()
         if not entries: return 5
@@ -275,32 +283,49 @@ class BpyGit:
         self.manifest.clear()
         self.manifest.update(entries)
         
-        self._print_diffs()
+        self._update_diffs()
 
         return 5
 
-    def _print_diffs(self):
+    def _update_diffs(self):
         repo = self.repo
         diffs_list = []
 
         empty_tree_sha = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
         empty_tree = repo.tree(empty_tree_sha)
 
+        # Get modified (unstaged) files
         if repo.head.is_valid():
+            # Diff between HEAD commit and working tree
             diffs = repo.head.commit.diff(None)
             for diff in diffs:
-                line = f"Modified: {diff.b_path}"
-                diffs_list.append(line)
+                diffs_list.append({
+                    "path": diff.b_path,
+                    "status": "modified"
+                })
         else:
-            untracked_files = repo.untracked_files
-            for path in untracked_files:
-                diffs_list.append(f"Untracked: {path}")
+            # repo is new, no commits yet, handle separately
+            pass
 
-            diffs = repo.index.diff(empty_tree)
-            for diff in diffs:
-                diffs_list.append(f"Staged: {diff.b_path}")
-        self.diffs = diffs_list
-        redraw("COZYSTUDIO_PT_panel")
+        # Get untracked files
+        for path in repo.untracked_files:
+            diffs_list.append({
+                "path": path,
+                "status": "untracked"
+            })
+
+        # Get staged files, compare index vs empty tree to find staged changes before commit
+        diffs = repo.index.diff(empty_tree)
+        for diff in diffs:
+            diffs_list.append({
+                "path": diff.b_path,
+                "status": "staged"
+            })
+
+        # Update only if it changed (avoid unnecessary redraws)=
+        if self.diffs != diffs_list:
+            self.diffs = diffs_list
+            redraw("COZYSTUDIO_PT_panel")
 
     def _delete_block_file(self, cozystudio_uuid):
         """
