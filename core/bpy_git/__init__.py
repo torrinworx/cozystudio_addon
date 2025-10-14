@@ -113,6 +113,7 @@ from ... import bl_types
 from .tracking import Track
 from ...utils.timers import timers
 from ...utils.write_dict import WriteDict
+from ...utils.redraw import redraw
 
 
 def default_json_encoder(obj):
@@ -162,6 +163,7 @@ class BpyGit:
         self.repo = None
         self.manifest = None
         self.initiated = False
+        self.diffs = None
 
         if str(self.path) == "" or not self.path.exists():
             # Blender file is not saved yet. Save before using Git features. - TODO Add warning in blender
@@ -272,8 +274,33 @@ class BpyGit:
         entries, blocks = self._current_state()
         self.manifest.clear()
         self.manifest.update(entries)
+        
+        self._print_diffs()
 
         return 5
+
+    def _print_diffs(self):
+        repo = self.repo
+        diffs_list = []
+
+        empty_tree_sha = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+        empty_tree = repo.tree(empty_tree_sha)
+
+        if repo.head.is_valid():
+            diffs = repo.head.commit.diff(None)
+            for diff in diffs:
+                line = f"Modified: {diff.b_path}"
+                diffs_list.append(line)
+        else:
+            untracked_files = repo.untracked_files
+            for path in untracked_files:
+                diffs_list.append(f"Untracked: {path}")
+
+            diffs = repo.index.diff(empty_tree)
+            for diff in diffs:
+                diffs_list.append(f"Staged: {diff.b_path}")
+        self.diffs = diffs_list
+        redraw("COZYSTUDIO_PT_panel")
 
     def _delete_block_file(self, cozystudio_uuid):
         """
@@ -309,7 +336,57 @@ class BpyGit:
             print(traceback.format_exc())
             print(data)
 
+    def _serialize(self, block) -> str:
+        """
+        Returns the serialized dictionary of a single data block.
+        input: data block class 
+        returns: json string representing the data block
+        
+        Also calls default_json_encoder for handling raw 64 bit data used in some data blocks.
+        """
+        
+        data = self.bpy_protocol.dump(block)
+        return json.dumps(data, indent=2, default=default_json_encoder)
 
+    def _current_state(self):
+        """
+        Gets the current state of tracked data blocks in the blender file.
+
+        Return two items:
+        entries: a dictionary where keys are cozystudio_uuids of blocks and
+            values contain block type, dependencies, and hash information.
+            Intended to be stored in the manifest
+        blocks: a dictionary of the serialized data blocks in the current scene.
+            keys are cozystudio_uuids, and values are the serialized data blocks.
+        """
+        entries = {}
+        blocks = {}
+
+        for type_name, impl_class in self.bpy_protocol.implementations.items():
+            if not hasattr(bpy.data, impl_class.bl_id):
+                continue
+
+            data_collection = getattr(bpy.data, impl_class.bl_id)
+            if not isinstance(data_collection, bpy.types.bpy_prop_collection):
+                continue
+
+            for db in data_collection:
+                if hasattr(db, "users") and db.users == 0:
+                    continue
+
+                cozystudio_uuid = getattr(db, "cozystudio_uuid", None)
+                deps = [d.cozystudio_uuid for d in self.bpy_protocol.resolve_deps(db)]
+                target = self._serialize(db)
+                hash = DeepHash(target)
+
+                entries[cozystudio_uuid] = {
+                    "type": impl_class.bl_id,
+                    "deps": deps,
+                    "hash": hash[target]
+                }
+                blocks[cozystudio_uuid] = target
+
+        return entries, blocks
 
 
 
@@ -443,70 +520,3 @@ class BpyGit:
         if any(deps[k] for k in deps):
             raise ValueError("Cycle detected in dependency graph")
         return order
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    def _serialize(self, block) -> str:
-        """
-        Returns the serialized dictionary of a single data block.
-        input: data block class 
-        returns: json string representing the data block
-        
-        Also calls default_json_encoder for handling raw 64 bit data used in some data blocks.
-        """
-        
-        data = self.bpy_protocol.dump(block)
-        return json.dumps(data, indent=2, default=default_json_encoder)
-
-    def _current_state(self):
-        """
-        Gets the current state of tracked data blocks in the blender file.
-
-        Return two items:
-        entries: a dictionary where keys are cozystudio_uuids of blocks and
-            values contain block type, dependencies, and hash information.
-            Intended to be stored in the manifest
-        blocks: a dictionary of the serialized data blocks in the current scene.
-            keys are cozystudio_uuids, and values are the serialized data blocks.
-        """
-        entries = {}
-        blocks = {}
-
-        for type_name, impl_class in self.bpy_protocol.implementations.items():
-            if not hasattr(bpy.data, impl_class.bl_id):
-                continue
-
-            data_collection = getattr(bpy.data, impl_class.bl_id)
-            if not isinstance(data_collection, bpy.types.bpy_prop_collection):
-                continue
-
-            for db in data_collection:
-                if hasattr(db, "users") and db.users == 0:
-                    continue
-
-                cozystudio_uuid = getattr(db, "cozystudio_uuid", None)
-                deps = [d.cozystudio_uuid for d in self.bpy_protocol.resolve_deps(db)]
-                target = self._serialize(db)
-                hash = DeepHash(target)
-
-                entries[cozystudio_uuid] = {
-                    "type": impl_class.bl_id,
-                    "deps": deps,
-                    "hash": hash[target]
-                }
-                blocks[cozystudio_uuid] = target
-
-        return entries, blocks
