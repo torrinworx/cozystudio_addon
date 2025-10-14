@@ -16,6 +16,8 @@ import importlib
 import subprocess
 import threading
 
+from .utils.timers import timers
+
 IMPORT_NAME_MAP = {"GitPython": "git"}
 
 REQUIREMENTS_PATH = os.path.join(os.path.dirname(__file__), "requirements.txt")
@@ -178,6 +180,7 @@ def unregister():
             from . import auto_load
 
             auto_load.unregister()
+            timers.unregister_all()
         except Exception as e:
             print("[CozyStudio] Error in auto_load.unregister:", e)
 
