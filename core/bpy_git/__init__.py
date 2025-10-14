@@ -105,12 +105,14 @@ import json
 import base64
 import traceback
 from pathlib import Path
+from deepdiff import DeepHash
 from collections import defaultdict, deque
 from git import Repo, InvalidGitRepositoryError, NoSuchPathError
 
 from ... import bl_types
 from .tracking import Track
-from ...utils.write_list import WriteList
+from ...utils.timers import timers
+from ...utils.write_dict import WriteDict
 
 
 def default_json_encoder(obj):
@@ -186,7 +188,8 @@ class BpyGit:
         try:
             if self.manifestpath.exists():
                 # Load existing manifest
-                self.manifest = WriteList(self.manifestpath)
+                self.manifest = WriteDict(self.manifestpath)
+                timers.register(self._check)
 
             # only loading an existing one here, initiating one is handled in self.init()
         except Exception as e:
@@ -204,16 +207,137 @@ class BpyGit:
         TODO: trigger modal popup: "Create blender git in /path/to/files/folder? This folder will become your
         project folder, all changes in this folder will be tracked."
         """
-        
-        print(self.initiated)
 
         if not self.initiated:
-            if not os.path.isdir(self.blockspath):
-                os.mkdir(self.blockspath)
-
-            self.manifest = WriteList(self.manifestpath)
+            os.mkdir(self.blockspath)
+            self.manifest = WriteDict(self.manifestpath)
             self.repo = Repo.init(self.path)
             self.initiated = True
+            timers.register(self._check)
+
+
+    def _check(self):
+        """
+        Checks every 0.5 seconds if the current data blocks are different than the ones on the disk,
+        if a diff is detected, replace the data block.
+
+        We should also somehow update the blender ui from here with git diff stuff so that the user can
+        see what has chnaged.
+
+        Unfortunately polling is the best way to get updates from a blender file about if a specific data
+        block has any updates. blenders msgbus and despgraph_update_post methods are both inadequite for
+        what we want to achieve here.
+        
+        This function is responsible for serializing the current state of blender data blocks, and writing
+        them to the git repo. It does not handle commiting changes to the repo. This structure was chosen
+        so we can display diffs in the blender ui similar to vscode git extension and stay close to the
+        intended functionality of git.
+        
+        TODO: Fix duplicate serialization with re-structuring. Right now we serialize once on each data block
+        to create the hashes, but since we don't pass these to the write functions, we serialize again to write
+        to new or updated block files. an optimization can be made here so we just serialize them all once, both
+        to compare and to write if needed.
+        """
+
+        if not self.manifest:
+
+            # just for testing:
+            self.manifest.clear()
+            entries, blocks = self._current_state()
+            self.manifest.update(entries)       
+            
+            return 5
+
+        entries, blocks = self._current_state()
+        if not entries: return 5
+
+        for uuid, entry in self.manifest.items():
+            cur = entries.get(uuid)
+            if cur is None:
+                # Delete .blocks/<uuid>.json file
+                print(f"block deleted: {uuid}")
+                self._delete_block_file(uuid)
+            elif cur["hash"] != entry.get("hash"):
+                # re-write .blocks/<uuid>.json file
+                print(f"block hash changed: {uuid}")
+                self._write_block_file(uuid, blocks[uuid])
+
+        for uuid in entries.keys():
+            if uuid not in self.manifest:
+                # write .blocks/<uuid>.json file
+                print(f"block added: {uuid}")
+                self._write_block_file(uuid, blocks[uuid])
+
+        # blanket update to manifest:
+        entries, blocks = self._current_state()
+        self.manifest.clear()
+        self.manifest.update(entries)
+
+        return 5
+
+    def _delete_block_file(self, cozystudio_uuid):
+        """
+        Delete a given block written to the .blocks directory.
+        """
+        try:
+            block_file = self.blockspath / f"{cozystudio_uuid}.json"
+
+            if not block_file.exists(): 
+                print(f"[BpyGit] Block file not found: {block_file}")
+                return False
+
+            block_file.unlink()
+            print(f"[BpyGit] Deleted block file: {block_file}")
+            return True
+
+        except Exception as e:
+            print(f"[BpyGit] Error deleting block file '{cozystudio_uuid}': {e}")
+            print(traceback.format_exc())
+            return False
+       
+    def _write_block_file(self, cozystudio_uuid, data):
+        """
+        Writes a given data block to the .blocks directory. Assumes data is already
+        serialized and 64 bit encoded where needed.
+        """
+        block_path = os.path.join(self.blockspath, f"{cozystudio_uuid}.json")
+        try:
+            with open(block_path,"w") as f:
+                # NOTE: Does not use default encoder. assumes data has already gone through self._serialize().
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(traceback.format_exc())
+            print(data)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    # Experimental functions, only the above is solidified.
+
 
     def commit(self):
         """Commit current state and run a quick serialization test."""
@@ -223,56 +347,19 @@ class BpyGit:
 
         for block in current_state:
             self._write(block)
-    
+
     def bpy_diff():
         """
         Given a data block, serialize it, and detect if there is a difference betwen it
         and it's stored value in .blocks, if no difference return false, if a difference
         return the difference, if error then throw an error.
         """
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    # Experimental functions, only the above is solidified.
-        
 
     def checkout(self, commit):
         """
         checks out a given commit in the git repo and reconstructs the blender file data blocks using the
         manifest at that commit.
         """
-
-    def serialize(self, block):
-        """
-        Returns the serialized dictionary of a single data block.
-        """
-        collection = getattr(bpy.data, block["type"], None)
-        if not collection:
-            print(f"No data collection {block['type']}")
-            return
-
-        target = next(
-            (
-                db
-                for db in collection
-                if getattr(db, "cozystudio_uuid", None) == block["cozystudio_uuid"]
-            ),
-            None,
-        )
-        return self.bpy_protocol.dump(target)
 
     def deserialize(self, data):
         """ """
@@ -296,22 +383,6 @@ class BpyGit:
             # Build fresh
             datablock = impl.construct(data)
             impl.load(data, datablock)
-
-    def _write(self, block):
-        """
-        Writes a data block to a .json file, using it's uuid as it's name.
-        """
-
-        data = self.serialize(block)
-
-        try:
-            with open(
-                os.path.join(self.blockspath, f"{block['cozystudio_uuid']}.json"), "w"
-            ) as f:
-                json.dump(data, f, indent=2, default=default_json_encoder)
-        except Exception as e:
-            print(traceback.format_exc())
-            print(data)
 
     def _read(self, cozystudio_uuid):
         """
@@ -372,12 +443,47 @@ class BpyGit:
         if any(deps[k] for k in deps):
             raise ValueError("Cycle detected in dependency graph")
         return order
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    def _serialize(self, block) -> str:
+        """
+        Returns the serialized dictionary of a single data block.
+        input: data block class 
+        returns: json string representing the data block
+        
+        Also calls default_json_encoder for handling raw 64 bit data used in some data blocks.
+        """
+        
+        data = self.bpy_protocol.dump(block)
+        return json.dumps(data, indent=2, default=default_json_encoder)
 
     def _current_state(self):
         """
-        Return list of trackable datablock summaries for the current blend.
+        Gets the current state of tracked data blocks in the blender file.
+
+        Return two items:
+        entries: a dictionary where keys are cozystudio_uuids of blocks and
+            values contain block type, dependencies, and hash information.
+            Intended to be stored in the manifest
+        blocks: a dictionary of the serialized data blocks in the current scene.
+            keys are cozystudio_uuids, and values are the serialized data blocks.
         """
-        blocks = []
+        entries = {}
+        blocks = {}
 
         for type_name, impl_class in self.bpy_protocol.implementations.items():
             if not hasattr(bpy.data, impl_class.bl_id):
@@ -391,16 +497,16 @@ class BpyGit:
                 if hasattr(db, "users") and db.users == 0:
                     continue
 
-                # Store deps of data blocks.
+                cozystudio_uuid = getattr(db, "cozystudio_uuid", None)
                 deps = [d.cozystudio_uuid for d in self.bpy_protocol.resolve_deps(db)]
+                target = self._serialize(db)
+                hash = DeepHash(target)
 
-                blocks.append(
-                    {
-                        "type": impl_class.bl_id,
-                        "cozystudio_uuid": getattr(db, "cozystudio_uuid", None),
-                        "deps": deps,
-                        # TODO: bring back a hashing thing so we can diff based on a simple hash here.
-                    }
-                )
+                entries[cozystudio_uuid] = {
+                    "type": impl_class.bl_id,
+                    "deps": deps,
+                    "hash": hash[target]
+                }
+                blocks[cozystudio_uuid] = target
 
-        return blocks
+        return entries, blocks
