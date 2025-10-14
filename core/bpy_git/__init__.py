@@ -9,38 +9,18 @@
 Note: shouldn't rely on if blender has saved them to count them as new commit, need to track commits ourselves because user might save blender
 file outside of commits. Blender save != commit
 
-
-
-
-
-
-
-
-
-
-
-
 What this system handles:
 - Writing serialized blender file changes, data blocks, to a manifest.json file of some kind.
 - Updating lfs data-blocks if changes are made in the blender file and linking them to the correct entries in the manifest
 - Constructing the blender file out of the manifest.json file from any commit, via git lfs data block raw storage by looking up data block ids in the manifest at that commit.
-
-
 
 What we are offloading to git:
 - diffing manifest.json to find what was updated/removed/added
 - git lfs will store the raw data-blocks, linked to data blocks in the manifest.json file.
 
 
-
-
-
-
-
 I'm still debating if we should allow traditional merge requests or rebases? Like I can't comprehend how that would work with
 data blocks. What is the industry standard for a version control system? Is it overwrite or nothing? how should we handle that?
-
-
 
 For storing data blocks in git lfs, look into blender data writing, storing data blocks directly to a .blend file, keeping track of which
 blend file is the current version of the data blocks listed in manifest, then pull from that blend file to build the blender file at a
@@ -111,6 +91,12 @@ TASKS:
     ensure that the initialized repo also automatically loads the manifest WriteDict if it's there.
 
 
+
+periodically, or when things in the blender file change, we need to "write" data blocks to the
+files. This is separate from committing them to the repo, or even git adding them. By writing
+them, we can then just use git to show the difference between their current state freshly
+written from the blend file data blocks and the state already committed in the git repo.
+
 """
 
 import os
@@ -122,26 +108,44 @@ from pathlib import Path
 from collections import defaultdict, deque
 from git import Repo, InvalidGitRepositoryError, NoSuchPathError
 
-from .. import bl_types
-from .track import Track
-# from ..utils.write_dict import WriteDict
-from ..utils.write_list import WriteList
+from ... import bl_types
+from .tracking import Track
+from ...utils.write_list import WriteList
 
 
 def default_json_encoder(obj):
     if isinstance(obj, bytes):
-        # Base64 encode bytes → safe text representation
         return base64.b64encode(obj).decode("ascii")
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def default_json_decoder(obj):
+    """Recursively convert Base64-encoded strings back to bytes if possible."""
+    if isinstance(obj, dict):
+        return {k: default_json_decoder(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [default_json_decoder(x) for x in obj]
+    elif isinstance(obj, str):
+        # Try to detect Base64 strings that originated from bytes
+        try:
+            decoded = base64.b64decode(obj.encode("ascii"))
+            # Optional heuristic: make sure we only replace if roundtrip encoding matches
+            if base64.b64encode(decoded).decode("ascii") == obj:
+                return decoded
+        except Exception:
+            pass  # Not a valid Base64 string, leave as-is
+        return obj
+    else:
+        return obj
 
 
 class BpyGit:
     def __init__(self):
         """
         Checks the current path, tries to load an exisitng bpy_git repo.
-        
+
         This doesn't try to rectify or start a bpy_git repo as this code
-        is loaded on blender startup. This only attempts to load a 
+        is loaded on blender startup. This only attempts to load a
         bpy_git repo if one can be found. The user must manually initate
         one with BpyGit.init(). That handles file creation and folder
         creation and git initialization.
@@ -162,17 +166,15 @@ class BpyGit:
             return
 
         try:
-            self.repo = Repo(self.path, search_parent_directories=True)
+            self.repo = Repo(self.path)
             if self.repo.bare:
                 self.repo = None  # No repo found at current blender file
             else:
                 self.initiated = True  # Repo found at current blender file
-
         except (InvalidGitRepositoryError, NoSuchPathError):
             # TODO: Warning in blender: No valid Git repository detected in {self.path}
             self.repo = None
             self.initiated = False
-            # Do not auto-create anything — following the design requirement
             return
         except Exception as e:
             print(f"[BpyGit] Unexpected error while initializing git: {e}")
@@ -185,7 +187,7 @@ class BpyGit:
             if self.manifestpath.exists():
                 # Load existing manifest
                 self.manifest = WriteList(self.manifestpath)
-            
+
             # only loading an existing one here, initiating one is handled in self.init()
         except Exception as e:
             print(f"[BpyGit] Error loading manifest: {e}")
@@ -195,13 +197,15 @@ class BpyGit:
     def init(self):
         """
         Initiates a bpy_git repo in the current blender file path.
-        
+
         This function checks that __init___ hasn't already loaded
         a git repo.
 
         TODO: trigger modal popup: "Create blender git in /path/to/files/folder? This folder will become your
         project folder, all changes in this folder will be tracked."
         """
+        
+        print(self.initiated)
 
         if not self.initiated:
             if not os.path.isdir(self.blockspath):
@@ -213,15 +217,37 @@ class BpyGit:
 
     def commit(self):
         """Commit current state and run a quick serialization test."""
-        current_state = self.current()
+        current_state = self._current_state()
 
-        # TODO: manifest api that on init creates manifest file, then is able to write individual blocks, should be included in write endpoint so we don't have to worry about this.
-        with open(self.manifestpath, "w") as json_file:
-            json.dump(current_state, json_file, indent=4)
+        self.manifest[:] = current_state
 
-        # Write out .blend blobs as before
         for block in current_state:
-            self.write(block)
+            self._write(block)
+    
+    def bpy_diff():
+        """
+        Given a data block, serialize it, and detect if there is a difference betwen it
+        and it's stored value in .blocks, if no difference return false, if a difference
+        return the difference, if error then throw an error.
+        """
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    # Experimental functions, only the above is solidified.
+        
 
     def checkout(self, commit):
         """
@@ -271,7 +297,7 @@ class BpyGit:
             datablock = impl.construct(data)
             impl.load(data, datablock)
 
-    def write(self, block):
+    def _write(self, block):
         """
         Writes a data block to a .json file, using it's uuid as it's name.
         """
@@ -287,7 +313,7 @@ class BpyGit:
             print(traceback.format_exc())
             print(data)
 
-    def read(self, cozystudio_uuid):
+    def _read(self, cozystudio_uuid):
         """
         Reads and returns the data of a serialized data block given a blocks cozystudio_uuid.
 
@@ -318,6 +344,7 @@ class BpyGit:
 
         with open(block_path, "r", encoding="utf-8") as f:
             data = json.load(f)
+            data = default_json_decoder(data)
 
         return data
 
@@ -346,7 +373,7 @@ class BpyGit:
             raise ValueError("Cycle detected in dependency graph")
         return order
 
-    def current(self):
+    def _current_state(self):
         """
         Return list of trackable datablock summaries for the current blend.
         """

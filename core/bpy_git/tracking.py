@@ -3,8 +3,8 @@ import uuid
 
 class Track:
     """
-    Handles tracking of bl_types. Assignes uuids to specific blender data blocks so that depsgraph can
-    be parsed more efficiently.
+    Handles tracking of data blocks using bl types defined by bl_types by assigning uuids
+    to them and subscribing to them if new ones appear so that new ones are assigned.
     """
 
     def __init__(self, bpy_protocol):
@@ -12,7 +12,7 @@ class Track:
         self.uuids_index = {}
         self.owners = []
         
-        self.bpy_protocol = bpy_protocol
+        self.bpy_types = bpy_protocol.implementations.items() # Only used to know which types to track.
 
     @staticmethod
     def _assign(uuids_index, bl_type):
@@ -72,7 +72,7 @@ class Track:
         """
         self._property()
 
-        for type_name, impl_class in self.bpy_protocol.implementations.items():
+        for type_name, impl_class in self.bpy_types:
             self._assign(self.uuids_index, impl_class)
             self.subscribe(impl_class)
 
