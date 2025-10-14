@@ -32,7 +32,7 @@ class COMMMIT_OT_PrintOperator(bpy.types.Operator):
 
 
 class MAIN_PT_Panel(bpy.types.Panel):
-    bl_label = "Cozy Studio"
+    bl_label = "Git"
     bl_idname = "COZYSTUDIO_PT_panel"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
@@ -40,9 +40,17 @@ class MAIN_PT_Panel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+
+        global git_instance
+        if git_instance and getattr(git_instance, "diffs", None):
+            layout.label(text="Changes")
+            for diff in git_instance.diffs:
+                layout.label(text=diff)
+        else:
+            layout.label(text="(no diffs)")
+
         layout.operator("cozystudio.init_repo", text="Init")
         layout.operator("cozystudio.commit", text="Commit")
-
 
 def is_data_restricted():
     try:
