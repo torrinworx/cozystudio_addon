@@ -39,9 +39,8 @@ class COZYSTUDIO_OT_AddFile(bpy.types.Operator):
 
     def execute(self, context):
         global git_instance
-        if git_instance and hasattr(git_instance.repo, "git"):
-            git_instance.repo.git.add(self.file_path)
-            git_instance._update_diffs()
+        git_instance.stage(changes=[self.file_path])
+        git_instance._update_diffs()
         return {"FINISHED"}
 
 
@@ -53,9 +52,8 @@ class COZYSTUDIO_OT_UnstageFile(bpy.types.Operator):
 
     def execute(self, context):
         global git_instance
-        if git_instance and hasattr(git_instance.repo, "git"):
-            git_instance.repo.git.reset("HEAD", self.file_path)
-            git_instance._update_diffs()
+        git_instance.unstage(changes=[self.file_path])
+        git_instance._update_diffs()
         return {"FINISHED"}
 
 
@@ -76,8 +74,11 @@ class MAIN_PT_Panel(bpy.types.Panel):
             layout.operator("cozystudio.commit", text="Commit")
             return
 
-        staged = [d for d in git_instance.diffs if d["status"] == "staged"]
-        unstaged = [d for d in git_instance.diffs if d["status"] != "staged"]
+        staged = [d for d in git_instance.diffs if d["status"].startswith("staged")]
+        unstaged = [d for d in git_instance.diffs if not d["status"].startswith("staged")]
+        
+        print("STAGED: ", staged)
+        print("UNSTAGED: ", unstaged)
 
         # --- Staged section ---
         if staged:
@@ -105,18 +106,24 @@ class MAIN_PT_Panel(bpy.types.Panel):
                 row.label(text=_status_abbrev(diff["status"]))
 
         layout.separator()
-        layout.operator("cozystudio.init_repo", text="Init")
         layout.operator("cozystudio.commit", text="Commit")
-
+        if not getattr(git_instance, 'initiated', False):
+            layout.operator("cozystudio.init_repo", text="Init")
 
 # Helper to display short status labels
 def _status_abbrev(status: str) -> str:
-    return {
+    base = status.removeprefix("staged_")
+    abbrevs = {
+        "added": "A",
         "modified": "M",
-        "untracked": "U",
         "deleted": "D",
-        "staged": "S",
-    }.get(status, status[0].upper())
+        "renamed": "R",
+        "copied": "C",
+        "untracked": "U",
+        "typechange": "T",
+    }
+    letter = abbrevs.get(base, "?")
+    return f"S:{letter}" if status.startswith("staged_") else letter
 
 
 def is_data_restricted():
