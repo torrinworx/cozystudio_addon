@@ -252,6 +252,10 @@ class BpyGit:
     are currently staged.
     
     TODO: Filter files we never want to stage or change like *.blend files and custom handle cozystudio.json.
+    TODO: Why are deleted data blocks (test: object in scene being removed after it's data block was staged. In a repo
+        with no init commit, fresh repo.) erroring when unstaging them, and the deleted file diff type doesn't appear in _update_diffs() output?
+    TODO: To make testing easier, create a dev button that resets, or un-init's the repo for easy sanitization.
+
     """
 
     def stage(self, changes=list[str]):
