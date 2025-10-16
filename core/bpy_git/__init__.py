@@ -153,7 +153,7 @@ def default_json_decoder(obj):
 
 
 class BpyGit:
-    def __init__(self):
+    def __init__(self, check_interval=5):
         """
         Checks the current path, tries to load an exisitng bpy_git repo.
 
@@ -174,6 +174,8 @@ class BpyGit:
         self.manifest = None
         self.initiated = False
         self.diffs = None
+        
+        self.check_interval = check_interval
 
         if str(self.path) == "" or not self.path.exists():
             # Blender file is not saved yet. Save before using Git features. - TODO Add warning in blender
@@ -226,12 +228,67 @@ class BpyGit:
             self.repo = Repo.init(self.path)
             self.initiated = True
             timers.register(self._check)
+
+    # ---- Staged changes ----
+    """
+    These three need some kind of a middleware that removes .blend, .blend1, and cozystudio.json from what is sent
+    to the user, and removes them from commits so that we aren't committing .blend files on each commit, only the
+    .blocks in lfs.
     
-    def add(self, changes):
+    We also need to define a startup protocall on repo init that commits a blank blender file that we can use to
+    construct the scene from, I'm curious if we could cache the build somewhere so we don't have to build the file
+    from the data blocks on blender file open every time as that will introduce overhead. Let's first worry about
+    reconsturcting a blender file from committed serialized data blocks in the .blocks folder before we get to that.
+    
+    As for handling cozystudio.json manifest, we need to manually commit the individual inline updates to the
+    individual data blocks that the user has added to the staged commit via self.stage(). so in the ui, the ui is
+    given a list of changes from the .blocks folder, but also other stuff in the whole repo, because in the future
+    we want to support asset folders with images/asset models, etc. But with these "Staged changes" functions we 
+    need to handle: Everytime a data block json is added to staged, we need to also update cozystudio.json with that
+    data block (I think this is already automatically handled, but because _check() runs on a timer we should do this
+    check for consistancy), then add that line to the staged version of cozystudio.json file. The user is never supposed
+    to handle commits or staging the cozystudio.json file, it's done behind the scenes completely. When the user commits
+    data block changes, we also commit the cozystudio.json file that is updated, only with the data block entries that 
+    are currently staged.
+    
+    TODO: Filter files we never want to stage or change like *.blend files and custom handle cozystudio.json.
+    """
+
+    def stage(self, changes=list[str]):
         """
-        Git wrapper, add a list of files to staging.
+        Stage one or more files in the git repo.
+        """
+        self.repo.index.add(changes)
+        self._update_diffs()
+
+
+    def unstage(self, changes: list[str]):
+        """
+        Removes changes from the staging area. Uses restore if possible,
+        handles unborn HEAD (no commits yet) gracefully.
         """
 
+        # HEAD exists, unstage like `git restore --staged <file>`
+        if self.repo.head.is_valid():
+            self.repo.git.restore('--staged', *changes)
+        # No commits yet (unborn HEAD), remove directly from index
+        else:
+            self.repo.index.remove(changes, working_tree=False)
+
+    def discard(self, changes=list[str]):
+        """
+        Reverts all changes in a given file to the current head commit on the branch.
+        
+        Basically: `git restore <file>`
+        """
+        pass
+    
+    def commit(self):
+        """
+        Commits the currently staged changes to the current branch.
+        """
+        pass
+    # --------
 
     def _check(self):
         """
@@ -249,17 +306,11 @@ class BpyGit:
         them to the git repo. It does not handle commiting changes to the repo. This structure was chosen
         so we can display diffs in the blender ui similar to vscode git extension and stay close to the
         intended functionality of git.
-        
-        TODO: Fix duplicate serialization with re-structuring. Right now we serialize once on each data block
-        to create the hashes, but since we don't pass these to the write functions, we serialize again to write
-        to new or updated block files. an optimization can be made here so we just serialize them all once, both
-        to compare and to write if needed.
         """
-
-        if not self.manifest: return 5
+        if not self.manifestpath.exists(): return self.check_interval
 
         entries, blocks = self._current_state()
-        if not entries: return 5
+        if not entries: return self.check_interval
 
         for uuid, entry in self.manifest.items():
             cur = entries.get(uuid)
@@ -282,49 +333,66 @@ class BpyGit:
         entries, blocks = self._current_state()
         self.manifest.clear()
         self.manifest.update(entries)
-        
+
         self._update_diffs()
 
-        return 5
+        return self.check_interval
 
     def _update_diffs(self):
         repo = self.repo
         diffs_list = []
-
         empty_tree_sha = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
         empty_tree = repo.tree(empty_tree_sha)
 
-        # Get modified (unstaged) files
-        if repo.head.is_valid():
-            # Diff between HEAD commit and working tree
-            diffs = repo.head.commit.diff(None)
+        # Base mapping for change types
+        change_type_map = {
+            "A": "added",
+            "M": "modified",
+            "D": "deleted",
+            "R": "renamed",
+            "C": "copied",
+            "T": "typechange",
+        }
+
+        def append_diffs(diffs, prefix=""):
+            """Helper to normalize and add diff entries to diffs_list"""
             for diff in diffs:
+                change = diff.change_type
+                status = change_type_map.get(change, "modified")
+                if prefix:
+                    status = f"{prefix}_{status}"
                 diffs_list.append({
-                    "path": diff.b_path,
-                    "status": "modified"
+                    "path": diff.b_path or diff.a_path,
+                    "status": status,
                 })
+
+        # Unstaged (working tree vs index or HEAD)
+        if repo.head.is_valid():
+            working_diffs = repo.head.commit.diff(None)
         else:
-            # repo is new, no commits yet, handle separately
-            pass
+            working_diffs = repo.index.diff(empty_tree)
+        append_diffs(working_diffs)
 
-        # Get untracked files
+        # Untracked
         for path in repo.untracked_files:
-            diffs_list.append({
-                "path": path,
-                "status": "untracked"
-            })
+            diffs_list.append({"path": path, "status": "untracked"})
 
-        # Get staged files, compare index vs empty tree to find staged changes before commit
-        diffs = repo.index.diff(empty_tree)
-        for diff in diffs:
-            diffs_list.append({
-                "path": diff.b_path,
-                "status": "staged"
-            })
+        # Staged (index vs HEAD or empty tree)
+        if repo.head.is_valid():
+            staged_diffs = repo.index.diff(repo.head.commit)
+        else:
+            staged_diffs = repo.index.diff(empty_tree)
+        append_diffs(staged_diffs, prefix="staged")
 
-        # Update only if it changed (avoid unnecessary redraws)=
-        if self.diffs != diffs_list:
-            self.diffs = diffs_list
+        staged_paths = {d["path"] for d in diffs_list if d["status"].startswith("staged")}
+        unique_diffs = []
+        for d in diffs_list:
+            if not (d["status"] in ("deleted", "modified", "added") and d["path"] in staged_paths):
+                unique_diffs.append(d)
+
+        # Update only if changed
+        if self.diffs != unique_diffs:
+            self.diffs = unique_diffs
             redraw("COZYSTUDIO_PT_panel")
 
     def _delete_block_file(self, cozystudio_uuid):
@@ -439,23 +507,6 @@ class BpyGit:
 
 
     # Experimental functions, only the above is solidified.
-
-
-    def commit(self):
-        """Commit current state and run a quick serialization test."""
-        current_state = self._current_state()
-
-        self.manifest[:] = current_state
-
-        for block in current_state:
-            self._write(block)
-
-    def bpy_diff():
-        """
-        Given a data block, serialize it, and detect if there is a difference betwen it
-        and it's stored value in .blocks, if no difference return false, if a difference
-        return the difference, if error then throw an error.
-        """
 
     def checkout(self, commit):
         """
