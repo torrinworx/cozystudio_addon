@@ -22,14 +22,34 @@ class INIT_OT_PrintOperator(bpy.types.Operator):
 
 class COMMMIT_OT_PrintOperator(bpy.types.Operator):
     bl_idname = "cozystudio.commit"
-    bl_label = "Compare"
+    bl_label = "Commit"
+
+    # Add a StringProperty so the user can type into it.
+    message: bpy.props.StringProperty(
+        name="Commit Message",
+        description="Message for this commit",
+        default="",
+    )
+
+    def invoke(self, context, event):
+        # Show a simple pop-up dialog to edit the message
+        return context.window_manager.invoke_props_dialog(self)
+
+    def draw(self, context):
+        # Draw the message field inside the pop-up
+        layout = self.layout
+        layout.prop(self, "message")
 
     def execute(self, context):
         global git_instance
 
-        git_instance.commit()
-        return {"FINISHED"}
+        if not self.message.strip():
+            self.report({'WARNING'}, "Commit message cannot be empty")
+            return {'CANCELLED'}
 
+        git_instance.commit(message=self.message)
+        self.report({'INFO'}, f"Committed: {self.message}")
+        return {'FINISHED'}
 
 class COZYSTUDIO_OT_AddFile(bpy.types.Operator):
     bl_idname = "cozystudio.add_file"
@@ -76,9 +96,6 @@ class MAIN_PT_Panel(bpy.types.Panel):
 
         staged = [d for d in git_instance.diffs if d["status"].startswith("staged")]
         unstaged = [d for d in git_instance.diffs if not d["status"].startswith("staged")]
-        
-        print("STAGED: ", staged)
-        print("UNSTAGED: ", unstaged)
 
         # --- Staged section ---
         if staged:
