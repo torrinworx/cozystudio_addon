@@ -46,7 +46,7 @@ class Track:
             )
 
     def _run_assign_loop(self):
-        """Runs every ~0.5 sec and ensures new datablocks have UUIDs."""
+        """Runs every ~0.5 sec and ensures new datablocks have UUIDs."""
         for type_name, impl_class in self.bpy_types:
             self._assign(self.uuids_index, impl_class)
         # return interval → keeps looping
