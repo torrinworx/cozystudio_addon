@@ -44,12 +44,13 @@ class COMMMIT_OT_PrintOperator(bpy.types.Operator):
         global git_instance
 
         if not self.message.strip():
-            self.report({'WARNING'}, "Commit message cannot be empty")
-            return {'CANCELLED'}
+            self.report({"WARNING"}, "Commit message cannot be empty")
+            return {"CANCELLED"}
 
         git_instance.commit(message=self.message)
-        self.report({'INFO'}, f"Committed: {self.message}")
-        return {'FINISHED'}
+        self.report({"INFO"}, f"Committed: {self.message}")
+        return {"FINISHED"}
+
 
 class COZYSTUDIO_OT_AddFile(bpy.types.Operator):
     bl_idname = "cozystudio.add_file"
@@ -88,29 +89,34 @@ class MAIN_PT_Panel(bpy.types.Panel):
         layout = self.layout
         global git_instance
 
-        if not git_instance or not getattr(git_instance, "diffs", None):
-            layout.label(text="(no diffs)")
-            layout.operator("cozystudio.init_repo", text="Init")
+        # Handle uninitialized repo case
+        if not git_instance or not getattr(git_instance, "initiated", False):
+            layout.label(text="No CozyStudio repo found.")
+            layout.operator("cozystudio.init_repo", text="Init Repository")
+            return
+
+        # Already initialized: show diffs if any
+        diffs = getattr(git_instance, "diffs", None)
+        if not diffs:
+            layout.label(text="No changes detected.")
             layout.operator("cozystudio.commit", text="Commit")
             return
 
-        staged = [d for d in git_instance.diffs if d["status"].startswith("staged")]
-        unstaged = [d for d in git_instance.diffs if not d["status"].startswith("staged")]
+        staged = [d for d in diffs if d["status"].startswith("staged")]
+        unstaged = [d for d in diffs if not d["status"].startswith("staged")]
 
         # --- Staged section ---
         if staged:
             box = layout.box()
             box.label(text="STAGED CHANGES", icon="CHECKMARK")
             for diff in staged:
-                # Each row: filename | Unstage | Status flag
                 row = box.row(align=True)
                 row.label(text=diff["path"], icon="FILE")
                 op = row.operator("cozystudio.unstage_file", text="", icon="REMOVE")
                 op.file_path = diff["path"]
-                # status marker at the end (S)
                 row.label(text=_status_abbrev(diff["status"]))
 
-        # --- Unstaged section (modified/untracked/deleted) ---
+        # --- Unstaged section ---
         if unstaged:
             box = layout.box()
             box.label(text="CHANGES", icon="GREASEPENCIL")
@@ -119,13 +125,15 @@ class MAIN_PT_Panel(bpy.types.Panel):
                 row.label(text=diff["path"], icon="FILE")
                 op = row.operator("cozystudio.add_file", text="", icon="ADD")
                 op.file_path = diff["path"]
-                # status marker (M/U/D)
                 row.label(text=_status_abbrev(diff["status"]))
 
         layout.separator()
         layout.operator("cozystudio.commit", text="Commit")
-        if not getattr(git_instance, 'initiated', False):
-            layout.operator("cozystudio.init_repo", text="Init")
+
+        # Offer init again if the repo somehow got uninitialized mid-session
+        if not getattr(git_instance, "initiated", False):
+            layout.operator("cozystudio.init_repo", text="Init Repository")
+
 
 # Helper to display short status labels
 def _status_abbrev(status: str) -> str:
