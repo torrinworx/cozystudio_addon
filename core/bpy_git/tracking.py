@@ -29,7 +29,6 @@ class Track:
             uid = getattr(idb, "cozystudio_uuid", "")
             if not uid:
                 uid = str(uuid.uuid4())
-                print("NEW UUID: ", uid, idb)
                 idb.cozystudio_uuid = uid
                 idb.uuid = uid
 
