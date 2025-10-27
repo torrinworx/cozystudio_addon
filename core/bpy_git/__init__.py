@@ -18,28 +18,23 @@ from ...utils.write import WriteDict
 from ...utils.redraw import redraw
 
 
+import base64
+
 def default_json_encoder(obj):
-    if isinstance(obj, bytes):
-        return base64.b64encode(obj).decode("ascii")
+    if isinstance(obj, (bytes, bytearray)):
+        # Tag so we can unambiguously reverse it later
+        return {"__bytes__": True, "data": base64.b64encode(obj).decode("ascii")}
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
-
 def default_json_decoder(obj):
-    """Recursively convert Base64-encoded strings back to bytes if possible."""
+    # Only decode if it was tagged during encoding
     if isinstance(obj, dict):
+        if obj.get("__bytes__") is True and "data" in obj:
+            return base64.b64decode(obj["data"])
+        # Recurse
         return {k: default_json_decoder(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [default_json_decoder(x) for x in obj]
-    elif isinstance(obj, str):
-        # Try to detect Base64 strings that originated from bytes
-        try:
-            decoded = base64.b64decode(obj.encode("ascii"))
-            # Optional heuristic: make sure we only replace if roundtrip encoding matches
-            if base64.b64encode(decoded).decode("ascii") == obj:
-                return decoded
-        except Exception:
-            pass  # Not a valid Base64 string, leave as-is
-        return obj
     else:
         return obj
 
@@ -571,15 +566,24 @@ class BpyGit:
         return data
 
     def deserialize(self, data: dict):
-        """
-        Create or update a Blender datablock from its serialized form.
-        """
         print("DATA: ", data)
+
+        # Defensive: normalize type_id if corrupted
+        type_id = data.get("type_id")
+        if isinstance(type_id, (bytes, bytearray)):
+            data["type_id"] = type_id.decode("utf-8", errors="ignore")
+
         restored_data = self.bpy_protocol.construct(data)
         self.bpy_protocol.load(data, restored_data)
-        print(f"[BpyGit] Deserialized created: {restored_data}") # Confirmed that this does create the data blocks I think?
 
-        # Somehow this isn't actually adding this to the scene for some reason.
+        # Optional: link orphan Objects into the active scene as a fallback
+        if isinstance(restored_data, bpy.types.Object) and restored_data.users == 0:
+            try:
+                bpy.context.scene.collection.objects.link(restored_data)
+            except RuntimeError:
+                pass
+
+        print(f"[BpyGit] Deserialized created: {restored_data}")
 
     def _topological_sort(self, manifest):
         """
