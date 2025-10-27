@@ -185,26 +185,8 @@ class BpyGit:
         that correspond to staged .blocks files.
         """
         try:
-            repo = self.repo
-            staged_blocks = [
-                d for d in (self.diffs or [])
-                if d["status"].startswith("staged") and d["path"].startswith(".blocks/")
-            ]
-            if not staged_blocks:
-                print("[BpyGit] No staged .blocks files to commit.")
-                return
-
-            files_to_add = [self.path / d["path"] for d in staged_blocks]
-            repo.index.add([str(f.relative_to(self.path)) for f in files_to_add])
-
-            # If HEAD doesn't exist (unborn repo), just commit directly
-            if not repo.head.is_valid():
-                repo.index.commit(message)
-            else:
-                # Regular commit
-                repo.index.commit(message)
-
-            print(f"[BpyGit] Committed {len(staged_blocks)} data blocks.")
+            self._update_diffs()
+            self.repo.index.commit(message)
             self._update_diffs()
         except Exception as e:
             print(f"[BpyGit] Commit failed: {e}")
