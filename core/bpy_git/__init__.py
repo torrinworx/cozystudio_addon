@@ -10,7 +10,7 @@ from pathlib import Path
 from fnmatch import fnmatch
 from deepdiff import DeepHash
 from collections import defaultdict, deque
-from git import Repo, InvalidGitRepositoryError, NoSuchPathError, GitCommandError
+from git import Repo, InvalidGitRepositoryError, NoSuchPathError
 from ... import bl_types
 from .tracking import Track
 from ...utils.timers import timers
@@ -260,8 +260,6 @@ class BpyGit:
             # Write manifest to disk
             manifest.write()
 
-            print(manifest)
-
             # Stage manifest in Git
             try:
                 manifest_rel = os.path.relpath(self.manifestpath, self.path)
@@ -475,18 +473,138 @@ class BpyGit:
 
         return entries, blocks
 
+    def checkout(self, commit):
+        """
+        checks out a given commit in the git repo and reconstructs the blender file data blocks using the
+        manifest at that commit.
 
+        1. Switch Git to that commit state (files, manifest, etc.).
+        → e.g. do self.repo.git.checkout(commit_hash).
 
+        2. Load the manifest (cozystudio.json) from that commit.
+        → This gives you the authoritative list of all datablocks and their dependency graph at that point in time.
 
+        3. Determine load order using topological_sort().   
+            Even though you said each commit includes all blocks, you still need deterministic order to ensure that blocks with dependencies are created after their dependencies exist in Blender.
 
+        4. For each block in sorted order:
+            Read .blocks/<uuid>.json file via _read().
+            Deserialize it into a Python dict (already handled by _read() + default_json_decoder()).
+            Pass it to deserialize() to either:
+                Find an existing Blender datablock and update it via impl.load().
+                Or create a new one via impl.construct() and then load data.
 
+        5. Clean up extra data blocks that exist in bpy.data but are not in that manifest (optional, but usually necessary to “revert” deletions).
 
+        6. Refresh UI and state tracking so that your Git panel updates (_update_diffs(), etc.).
+        """
+        self.repo.git.checkout(commit)  # restore cozystudio.json + .blocks/ to that commit
+        
+        self.manifest = WriteDict(self.manifestpath) # re-read manifest from current commit
 
+        # Get topological dependency load order for blocks:
+        load_order = self._topological_sort(self.manifest)
+        
+        # Load blocks into scene:
+        for uuid in load_order:
+            data = self._read(uuid)
+            try:
+                self.deserialize(data)
+            except Exception as e:
+                print(f"[BpyGit] Failed to restore block {uuid}: {e}")
+        
+        # Cleanup orphaned data blocks that don't have references in the current commits manifest.
+        all_valid = set(self.manifest.keys())
+        for type_name, impl_class in self.bpy_protocol.implementations.items():
+            data_collection = getattr(bpy.data, impl_class.bl_id, None)
+            if not data_collection:
+                continue
+            for block in list(data_collection):
+                uuid = getattr(block, "cozystudio_uuid", None)
+                if uuid and uuid not in all_valid:
+                    bpy.data.remove(block)
 
+        # Update state
+        entries, blocks = self._current_state()
+        self.state = {entries, blocks}
 
+        # Update diffs
+        self._update_diffs()
 
+        # Redraw panel
+        redraw("COZYSTUDIO_PT_panel")
 
+    def _read(self, cozystudio_uuid):
+        """
+        Reads and returns the data of a serialized data block given a blocks cozystudio_uuid.
+        """
+        block_path = self.blockspath / f"{cozystudio_uuid}.json"
+        if not block_path.exists():
+            raise FileNotFoundError(f"Data file not found: {block_path}")
 
+        with open(block_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            data = default_json_decoder(data)
+        return data
+
+    def deserialize(self, data: dict):
+        """
+        Create or update a Blender datablock from its serialized form.
+        """
+        type_id = data.get("type")
+        if not type_id:
+            raise ValueError("Invalid datablock: missing type identifier")
+
+        impl = self.bpy_protocol.get_implementation(type_id) # Get bl_types class/handler
+        datablock = impl.resolve(data) # see if one already exists in bpy.data
+
+        if datablock: # if it exists in the scene, load the serialized state into it.
+            impl.load(data, datablock)
+            return datablock
+        else: # if it doesn't exist in the scene, construct an identical one.
+            new_block = impl.construct(data)
+            impl.load(data, new_block)
+            return new_block
+
+    def _topological_sort(self, manifest):
+        """
+        Return list of UUIDs sorted so that all dependencies appear before their dependents.
+
+        Works with either:
+        - dict form: {uuid: {"deps": [...]}, ...}
+        - list form: [{"cozystudio_uuid": ..., "deps": [...]}, ...]
+        """
+        # Normalize into a {uuid: set(deps)} mapping
+        if isinstance(manifest, dict):
+            deps = {uuid: set(v.get("deps", [])) for uuid, v in manifest.items()}
+        else:
+            deps = {e["cozystudio_uuid"]: set(e.get("deps", [])) for e in manifest}
+
+        # Build reverse lookup: dep -> dependents
+        dependents = defaultdict(set)
+        for uuid, ds in deps.items():
+            for dep in ds:
+                dependents[dep].add(uuid)
+
+        # Nodes with no incoming edges (roots)
+        queue = deque([u for u, ds in deps.items() if not ds])
+        order = []
+
+        # Standard Kahn's algorithm
+        while queue:
+            u = queue.popleft()
+            order.append(u)
+            for v in list(dependents[u]):
+                deps[v].discard(u)
+                if not deps[v]:
+                    queue.append(v)
+
+        # Detect remaining edges (cycles)
+        cycles = [k for k, ds in deps.items() if ds]
+        if cycles:
+            raise ValueError(f"Dependency cycle detected: {cycles}")
+
+        return order
 
 
 
@@ -496,13 +614,7 @@ class BpyGit:
 
 
     # Experimental functions, only the above is solidified.
-    def checkout(self, commit):
-        """
-        checks out a given commit in the git repo and reconstructs the blender file data blocks using the
-        manifest at that commit.
-        """
-        pass
-
+    """
     def deserialize(self, data):
         """ """
         type_id = data.get("type_id")
@@ -521,63 +633,4 @@ class BpyGit:
             # Build fresh
             datablock = impl.construct(data)
             impl.load(data, datablock)
-
-    def _read(self, cozystudio_uuid):
-        """
-        git config --global user.email "you@example.com"
-        git config --global user.name "Your Name"
-
-        Reads and returns the data of a serialized data block given a blocks cozystudio_uuid.
-        NOTES:
-        IMPORTANT: Read assumes that the data block no longer exists in the .blend file
-        it doesn't try to resolve to an existing data block, it constructs a new one and
-        it's dependencies from scratch.
-        block_entry looks like this:
-        {
-            "type": "scenes",
-            "name": "Scene",
-            "name_full": "Scene",
-            "cozystudio_uuid": "bc6b3df8-0e87-40fd-be4a-040c9927a299",
-            "deps": [
-                "b264c244-6853-4017-aac0-a86981fac218",
-                "189b95bf-f14e-40ca-b344-64c5a2a6cd8c"
-            ]
-        },
-        need to make sure that a datablock is constructed only after all the blocks it references (“dependencies”) exist in Blender
-        """
-        block_path = self.blockspath / f"{cozystudio_uuid}.json"
-        if not block_path.exists():
-            raise FileNotFoundError(f"Data file not found: {block_path}")
-
-        with open(block_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            data = default_json_decoder(data)
-        return data
-
-    def topological_sort(manifest):
-        """
-        Sketch: Code for sorting manifest entries to build a dependency based order to load
-        data blocks of a given manifest.
-        """
-        deps = {e["cozystudio_uuid"]: set(e.get("deps", [])) for e in manifest}
-        reverse = defaultdict(set)
-        for k, vs in deps.items():
-            for v in vs:
-                reverse[v].add(k)
-
-        # Find roots (no dependencies)
-        roots = deque([k for k, ds in deps.items() if not ds])
-        order = []
-
-        while roots:
-            n = roots.popleft()
-            order.append(n)
-            for m in list(reverse[n]):
-                deps[m].remove(n)
-                if not deps[m]:
-                    roots.append(m)
-
-        if any(deps[k] for k in deps):
-            raise ValueError("Cycle detected in dependency graph")
-
-        return order
+    """
