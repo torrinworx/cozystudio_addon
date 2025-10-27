@@ -50,6 +50,48 @@ class COMMMIT_OT_PrintOperator(bpy.types.Operator):
         git_instance.commit(message=self.message)
         self.report({"INFO"}, f"Committed: {self.message}")
         return {"FINISHED"}
+    
+class COZYSTUDIO_OT_CheckoutCommit(bpy.types.Operator):
+    """Checkout a specific commit hash (testing)"""
+    bl_idname = "cozystudio.checkout_commit"
+    bl_label = "Checkout Commit"
+
+    commit_hash: bpy.props.StringProperty(
+        name="Commit Hash",
+        description="Enter git commit hash to checkout",
+        default="",
+    )
+
+    def invoke(self, context, event):
+        # Show a popup dialog with a text field for commit hash
+        return context.window_manager.invoke_props_dialog(self, width=400)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "commit_hash")
+
+    def execute(self, context):
+        global git_instance
+
+        if not git_instance or not getattr(git_instance, "initiated", False):
+            self.report({"ERROR"}, "No CozyStudio Git repo initialized.")
+            return {"CANCELLED"}
+
+        if not self.commit_hash.strip():
+            self.report({"WARNING"}, "Please enter a commit hash.")
+            return {"CANCELLED"}
+
+        try:
+            print(f"[CozyStudio] Checking out commit {self.commit_hash}")
+            git_instance.checkout(self.commit_hash)
+            self.report({"INFO"}, f"Checked out commit {self.commit_hash[:8]}...")
+        except Exception as e:
+            self.report({"ERROR"}, f"Checkout failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"CANCELLED"}
+
+        return {"FINISHED"}
 
 
 class COZYSTUDIO_OT_AddFile(bpy.types.Operator):
@@ -97,11 +139,6 @@ class MAIN_PT_Panel(bpy.types.Panel):
 
         # Already initialized: show diffs if any
         diffs = getattr(git_instance, "diffs", None)
-        if not diffs:
-            layout.label(text="No changes detected.")
-            layout.operator("cozystudio.commit", text="Commit")
-            return
-
         staged = [d for d in diffs if d["status"].startswith("staged")]
         unstaged = [d for d in diffs if not d["status"].startswith("staged")]
 
@@ -130,10 +167,9 @@ class MAIN_PT_Panel(bpy.types.Panel):
         layout.separator()
         layout.operator("cozystudio.commit", text="Commit")
 
-        # Offer init again if the repo somehow got uninitialized mid-session
-        if not getattr(git_instance, "initiated", False):
-            layout.operator("cozystudio.init_repo", text="Init Repository")
-
+        layout.label(text="Test Checkout")
+        checkout_row = layout.row(align=True)
+        checkout_row.operator("cozystudio.checkout_commit", text="Checkout Commit", icon="FILE_REFRESH")
 
 # Helper to display short status labels
 def _status_abbrev(status: str) -> str:
