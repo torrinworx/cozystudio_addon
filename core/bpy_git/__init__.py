@@ -497,6 +497,28 @@ class BpyGit:
         5. Clean up extra data blocks that exist in bpy.data but are not in that manifest (optional, but usually necessary to “revert” deletions).
 
         6. Refresh UI and state tracking so that your Git panel updates (_update_diffs(), etc.).
+
+
+        Current issue: 
+        [CozyStudio] Checking out commit 8317b0f713c2cc09f4c0d44b380be3b1116a2549
+        [BpyGit] Failed to restore block 6ccdbf8d-a5f3-4e78-9400-b3741f6e2a91: 'NoneType' object has no attribute 'resolve'
+        [BpyGit] Failed to restore block 612f6d4a-2c2d-402d-9d05-08cf60b6cc5d: 'NoneType' object has no attribute 'resolve'
+        [BpyGit] Failed to restore block 5666ee1a-df4e-4999-a139-cfc8f9a7adb6: 'NoneType' object has no attribute 'resolve'
+        [BpyGit] Failed to restore block 150bcd8c-e1b8-4017-9315-d5c0b54a7a16: 'NoneType' object has no attribute 'resolve'
+        [BpyGit] Failed to restore block eb74b2c6-2e72-4829-b69e-b74fc8eb9b1e: 'NoneType' object has no attribute 'resolve'
+        [BpyGit] Failed to restore block 4b76393e-8d34-4aa1-b330-441fcd552429: 'NoneType' object has no attribute 'resolve'
+        [BpyGit] Failed to restore block f3b3a3c5-2f60-4779-97b6-ee98fd73b152: 'NoneType' object has no attribute 'resolve'
+        [BpyGit] Failed to restore block 3f378407-2d70-45d7-bdee-178b0b2b1ad3: 'NoneType' object has no attribute 'resolve'
+        [BpyGit] Failed to restore block 5af1d9f3-439f-4608-8072-23fed0d067f5: 'NoneType' object has no attribute 'resolve'
+        [BpyGit] Failed to restore block 27a4e24f-d05c-4d5c-9992-abe3e3cd23fe: 'NoneType' object has no attribute 'resolve'
+        [BpyGit] Failed to restore block 968f6430-b92a-4ede-b891-41fb47d9b09d: 'NoneType' object has no attribute 'resolve'
+        Traceback (most recent call last):
+        File "/home/torrin/.config/blender/4.5/extensions/vscode_development/cozystudio_addon/ui/test.py", line 86, in execute
+            git_instance.checkout(self.commit_hash)
+        File "/home/torrin/.config/blender/4.5/extensions/vscode_development/cozystudio_addon/core/bpy_git/__init__.py", line 525, in checkout
+            bpy.data.remove(block)
+            ^^^^^^^^^^^^^^^
+        AttributeError: 'BlendData' object has no attribute 'remove'
         """
         self.repo.git.checkout(commit)  # restore cozystudio.json + .blocks/ to that commit
         
@@ -520,13 +542,14 @@ class BpyGit:
             if not data_collection:
                 continue
             for block in list(data_collection):
-                uuid = getattr(block, "cozystudio_uuid", None)
-                if uuid and uuid not in all_valid:
-                    bpy.data.remove(block)
+                pass
+                # uuid = getattr(block, "cozystudio_uuid", None)
+                # if uuid and uuid not in all_valid:
+                #     bpy.data.remove(block)
 
         # Update state
-        entries, blocks = self._current_state()
-        self.state = {entries, blocks}
+        # entries, blocks = self._current_state()
+        # self.state = {entries, blocks}
 
         # Update diffs
         self._update_diffs()
@@ -551,20 +574,12 @@ class BpyGit:
         """
         Create or update a Blender datablock from its serialized form.
         """
-        type_id = data.get("type")
-        if not type_id:
-            raise ValueError("Invalid datablock: missing type identifier")
+        print("DATA: ", data)
+        restored_data = self.bpy_protocol.construct(data)
+        self.bpy_protocol.load(data, restored_data)
+        print(f"[BpyGit] Deserialized created: {restored_data}") # Confirmed that this does create the data blocks I think?
 
-        impl = self.bpy_protocol.get_implementation(type_id) # Get bl_types class/handler
-        datablock = impl.resolve(data) # see if one already exists in bpy.data
-
-        if datablock: # if it exists in the scene, load the serialized state into it.
-            impl.load(data, datablock)
-            return datablock
-        else: # if it doesn't exist in the scene, construct an identical one.
-            new_block = impl.construct(data)
-            impl.load(data, new_block)
-            return new_block
+        # Somehow this isn't actually adding this to the scene for some reason.
 
     def _topological_sort(self, manifest):
         """
