@@ -64,7 +64,6 @@ class BpyGit:
 
         self.repo = None
         self.manifest = None
-        self.manifest_lock = False
         self.initiated = False
         self.diffs = None
         self.state = None  # unified current state, entries and blocks.
@@ -141,6 +140,7 @@ class BpyGit:
             except Exception as e:
                 print(f"[BpyGit] stage() error on {path}: {e}")
 
+        self._manifest(changes)
         self._update_diffs()
 
     def unstage(self, changes: list[str]):
@@ -161,6 +161,7 @@ class BpyGit:
         except Exception as e:
             print(f"[BpyGit] unstage() error: {e}")
 
+        self._manifest(changes)
         self._update_diffs()
 
     def discard(self, changes=list[str]):
@@ -171,6 +172,11 @@ class BpyGit:
         Basically: `git restore <file>`
         """
         changes = self._filter_changes(changes)
+
+        # ...
+
+        self._manifest(changes)
+        self._update_diffs()
         pass
 
     def commit(self, message="CozyStudio Commit"):
@@ -222,6 +228,68 @@ class BpyGit:
                 continue
             filtered.append(path)
         return filtered
+    
+    def _manifest(self, changes: list[str]):
+        """
+        Update cozystudio.json to reflect the .blocks/*.json changes being staged,
+        unstaged, or discarded.
+
+        Rules:
+        - If a .blocks/<uuid>.json file was added or modified: update its manifest entry
+            using current data from `self.state['entries']`.
+        - If a .blocks/<uuid>.json file was deleted: remove that block UUID from manifest.
+        - Then write cozystudio.json, and stage it in the repo for commit.
+        """
+
+        # Filter out non-block changes
+        changes = [c for c in self._filter_changes(changes) if c.startswith(".blocks/")]
+        if not changes:
+            return
+
+        entries = self.state.get("entries", {})
+        manifest = self.manifest
+
+        try:
+            for rel_path in changes:
+                block_path = Path(self.path, rel_path)
+                block_uuid = block_path.stem
+
+                # Deleted or missing .blocks file → remove from manifest
+                if not block_path.exists():
+                    if block_uuid in manifest:
+                        del manifest[block_uuid]
+                        print(f"[BpyGit] Removed manifest entry for deleted block {block_uuid}")
+                    continue
+
+                # If present in current state → update manifest entry
+                current_entry = entries.get(block_uuid)
+                if current_entry:
+                    manifest[block_uuid] = {
+                        "type": current_entry["type"],
+                        "deps": current_entry.get("deps", []),
+                        "hash": current_entry["hash"],
+                    }
+                    print(f"[BpyGit] Updated manifest entry: {block_uuid}")
+                else:
+                    # File exists but not found in current state
+                    # (shouldn't happen normally; keep manifest as-is)
+                    print(f"[BpyGit] Warning: {block_uuid} not in current state")
+
+            # Write manifest to disk
+            manifest.write()
+
+            print(manifest)
+
+            # Stage manifest in Git
+            try:
+                manifest_rel = os.path.relpath(self.manifestpath, self.path)
+                self.repo.index.add([manifest_rel])
+            except Exception as e:
+                print(f"[BpyGit] Error staging updated manifest: {e}")
+
+        except Exception:
+            print("[BpyGit] Error updating manifest:")
+            print(traceback.format_exc())
 
     # --------
     def _check(self):
