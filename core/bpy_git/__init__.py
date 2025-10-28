@@ -1,6 +1,7 @@
 """
 Git system for blender files based on blender's internal data blocks.
 """
+
 import os
 import bpy
 import json
@@ -17,14 +18,15 @@ from ...utils.timers import timers
 from ...utils.write import WriteDict
 from ...utils.redraw import redraw
 
-
 import base64
+
 
 def default_json_encoder(obj):
     if isinstance(obj, (bytes, bytearray)):
         # Tag so we can unambiguously reverse it later
         return {"__bytes__": True, "data": base64.b64encode(obj).decode("ascii")}
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
 
 def default_json_decoder(obj):
     # Only decode if it was tagged during encoding
@@ -205,7 +207,7 @@ class BpyGit:
                 continue
             filtered.append(path)
         return filtered
-    
+
     def _manifest(self, changes: list[str]):
         """
         Update cozystudio.json to reflect the .blocks/*.json changes being staged,
@@ -235,7 +237,9 @@ class BpyGit:
                 if not block_path.exists():
                     if block_uuid in manifest:
                         del manifest[block_uuid]
-                        print(f"[BpyGit] Removed manifest entry for deleted block {block_uuid}")
+                        print(
+                            f"[BpyGit] Removed manifest entry for deleted block {block_uuid}"
+                        )
                     continue
 
                 # If present in current state → update manifest entry
@@ -342,10 +346,12 @@ class BpyGit:
                 status = change_type_map.get(change, "modified")
                 if prefix:
                     status = f"{prefix}_{status}"
-                diffs_list.append({
-                    "path": diff.b_path or diff.a_path,
-                    "status": status,
-                })
+                diffs_list.append(
+                    {
+                        "path": diff.b_path or diff.a_path,
+                        "status": status,
+                    }
+                )
 
         # "Unstaged" changes = what differs between index and working tree
         # i.e. what you would see if you did "git diff" (no arguments).
@@ -366,19 +372,27 @@ class BpyGit:
             # Compare index with empty tree, but force anything we find to be "added"
             staged_diffs = repo.index.diff(empty_tree_sha)
             for diff in staged_diffs:
-                diffs_list.append({
-                    "path": diff.b_path or diff.a_path,
-                    "status": "staged_added",  # hardcode as added
-                })
+                diffs_list.append(
+                    {
+                        "path": diff.b_path or diff.a_path,
+                        "status": "staged_added",  # hardcode as added
+                    }
+                )
 
         # Post-process: avoid double-listing files as both “unstaged” + “staged”
         # if they appear in both sets.  Also filter out .blend, cozystudio.json, etc.
-        staged_paths = {d["path"] for d in diffs_list if d["status"].startswith("staged")}
+        staged_paths = {
+            d["path"] for d in diffs_list if d["status"].startswith("staged")
+        }
         unique_diffs = []
         for d in diffs_list:
             # If a file is listed as staged_{added|modified|deleted},
             # we skip the “unstaged” A/M/D version so we only show it once.
-            if d["path"] in staged_paths and d["status"] in ("added", "modified", "deleted"):
+            if d["path"] in staged_paths and d["status"] in (
+                "added",
+                "modified",
+                "deleted",
+            ):
                 continue
             unique_diffs.append(d)
 
@@ -462,7 +476,7 @@ class BpyGit:
                 entries[cozystudio_uuid] = {
                     "type": impl_class.bl_id,
                     "deps": deps,
-                    "hash": hash[target]
+                    "hash": hash[target],
                 }
                 blocks[cozystudio_uuid] = target
 
@@ -479,7 +493,7 @@ class BpyGit:
         2. Load the manifest (cozystudio.json) from that commit.
         → This gives you the authoritative list of all datablocks and their dependency graph at that point in time.
 
-        3. Determine load order using topological_sort().   
+        3. Determine load order using topological_sort().
             Even though you said each commit includes all blocks, you still need deterministic order to ensure that blocks with dependencies are created after their dependencies exist in Blender.
 
         4. For each block in sorted order:
@@ -492,36 +506,18 @@ class BpyGit:
         5. Clean up extra data blocks that exist in bpy.data but are not in that manifest (optional, but usually necessary to “revert” deletions).
 
         6. Refresh UI and state tracking so that your Git panel updates (_update_diffs(), etc.).
-
-
-        Current issue: 
-        [CozyStudio] Checking out commit 8317b0f713c2cc09f4c0d44b380be3b1116a2549
-        [BpyGit] Failed to restore block 6ccdbf8d-a5f3-4e78-9400-b3741f6e2a91: 'NoneType' object has no attribute 'resolve'
-        [BpyGit] Failed to restore block 612f6d4a-2c2d-402d-9d05-08cf60b6cc5d: 'NoneType' object has no attribute 'resolve'
-        [BpyGit] Failed to restore block 5666ee1a-df4e-4999-a139-cfc8f9a7adb6: 'NoneType' object has no attribute 'resolve'
-        [BpyGit] Failed to restore block 150bcd8c-e1b8-4017-9315-d5c0b54a7a16: 'NoneType' object has no attribute 'resolve'
-        [BpyGit] Failed to restore block eb74b2c6-2e72-4829-b69e-b74fc8eb9b1e: 'NoneType' object has no attribute 'resolve'
-        [BpyGit] Failed to restore block 4b76393e-8d34-4aa1-b330-441fcd552429: 'NoneType' object has no attribute 'resolve'
-        [BpyGit] Failed to restore block f3b3a3c5-2f60-4779-97b6-ee98fd73b152: 'NoneType' object has no attribute 'resolve'
-        [BpyGit] Failed to restore block 3f378407-2d70-45d7-bdee-178b0b2b1ad3: 'NoneType' object has no attribute 'resolve'
-        [BpyGit] Failed to restore block 5af1d9f3-439f-4608-8072-23fed0d067f5: 'NoneType' object has no attribute 'resolve'
-        [BpyGit] Failed to restore block 27a4e24f-d05c-4d5c-9992-abe3e3cd23fe: 'NoneType' object has no attribute 'resolve'
-        [BpyGit] Failed to restore block 968f6430-b92a-4ede-b891-41fb47d9b09d: 'NoneType' object has no attribute 'resolve'
-        Traceback (most recent call last):
-        File "/home/torrin/.config/blender/4.5/extensions/vscode_development/cozystudio_addon/ui/test.py", line 86, in execute
-            git_instance.checkout(self.commit_hash)
-        File "/home/torrin/.config/blender/4.5/extensions/vscode_development/cozystudio_addon/core/bpy_git/__init__.py", line 525, in checkout
-            bpy.data.remove(block)
-            ^^^^^^^^^^^^^^^
-        AttributeError: 'BlendData' object has no attribute 'remove'
         """
-        self.repo.git.checkout(commit)  # restore cozystudio.json + .blocks/ to that commit
-        
-        self.manifest = WriteDict(self.manifestpath) # re-read manifest from current commit
+        self.repo.git.checkout(
+            commit
+        )  # restore cozystudio.json + .blocks/ to that commit
+
+        self.manifest = WriteDict(
+            self.manifestpath
+        )  # re-read manifest from current commit
 
         # Get topological dependency load order for blocks:
         load_order = self._topological_sort(self.manifest)
-        
+
         # Load blocks into scene:
         for uuid in load_order:
             data = self._read(uuid)
@@ -529,7 +525,7 @@ class BpyGit:
                 self.deserialize(data)
             except Exception as e:
                 print(f"[BpyGit] Failed to restore block {uuid}: {e}")
-        
+
         # Cleanup orphaned data blocks that don't have references in the current commits manifest.
         all_valid = set(self.manifest.keys())
         for type_name, impl_class in self.bpy_protocol.implementations.items():
@@ -543,8 +539,7 @@ class BpyGit:
                 #     bpy.data.remove(block)
 
         # Update state
-        # entries, blocks = self._current_state()
-        # self.state = {entries, blocks}
+        self._check()
 
         # Update diffs
         self._update_diffs()
@@ -624,13 +619,6 @@ class BpyGit:
             raise ValueError(f"Dependency cycle detected: {cycles}")
 
         return order
-
-
-
-
-
-
-
 
     # Experimental functions, only the above is solidified.
     """
