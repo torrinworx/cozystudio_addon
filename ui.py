@@ -1,5 +1,5 @@
 import bpy
-from ..core.bpy_git import BpyGit
+from .core.bpy_git import BpyGit
 from bpy.app.handlers import persistent
 
 git_instance = None
