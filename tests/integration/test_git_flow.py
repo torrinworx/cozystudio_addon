@@ -126,3 +126,75 @@ def test_deserialize_reuses_existing_object():
         or getattr(obj, "uuid", None) == uuid
     ]
     assert len(matches) == 1, "Duplicate objects were created during deserialize"
+
+
+@pytest.mark.order(7)
+def test_checkout_does_not_dirty_blocks():
+    ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
+    git_inst = init_git_repo_for_test(ui_mod)
+
+    test_obj = create_test_object(name="CozyNoDiffObject")
+    test_obj.location.x = 1.0
+
+    ensure_tracking_assignments(git_inst)
+
+    uuid = wait_for_uuid(test_obj)
+    assert uuid, "Object UUID was not assigned"
+    mesh_uuid = wait_for_uuid(test_obj.data)
+    assert mesh_uuid, "Mesh UUID was not assigned"
+
+    git_inst._check()
+    block_path = wait_for_block_file(git_inst, uuid)
+    assert block_path is not None, "Block file was not created"
+
+    rel_path = f".blocks/{uuid}.json"
+    mesh_path = f".blocks/{mesh_uuid}.json"
+    result = bpy.ops.cozystudio.add_file(file_path=rel_path)
+    assert "FINISHED" in result, f"add_file returned {result}"
+    result = bpy.ops.cozystudio.add_file(file_path=mesh_path)
+    assert "FINISHED" in result, f"add_file returned {result}"
+
+    result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Commit A")
+    assert "FINISHED" in result, f"commit returned {result}"
+    commit_a = git_inst.repo.head.commit.hexsha
+
+    test_obj.location.x = 2.0
+    git_inst._check()
+    result = bpy.ops.cozystudio.add_file(file_path=rel_path)
+    assert "FINISHED" in result, f"add_file returned {result}"
+
+    result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Commit B")
+    assert "FINISHED" in result, f"commit returned {result}"
+    commit_b = git_inst.repo.head.commit.hexsha
+
+    result = bpy.ops.cozystudio.checkout_commit("EXEC_DEFAULT", commit_hash=commit_a)
+    assert "FINISHED" in result, f"checkout_commit returned {result}"
+
+    working_paths = {
+        diff.b_path or diff.a_path
+        for diff in git_inst.repo.index.diff(None)
+    }
+    working_paths.update(git_inst.repo.untracked_files)
+    dirty_blocks = {path for path in working_paths if path.startswith(".blocks/")}
+    assert rel_path not in dirty_blocks, (
+        f"Unexpected object block diff after checkout: {rel_path}"
+    )
+    assert mesh_path not in dirty_blocks, (
+        f"Unexpected mesh block diff after checkout: {mesh_path}"
+    )
+
+    result = bpy.ops.cozystudio.checkout_commit("EXEC_DEFAULT", commit_hash=commit_b)
+    assert "FINISHED" in result, f"checkout_commit returned {result}"
+
+    working_paths = {
+        diff.b_path or diff.a_path
+        for diff in git_inst.repo.index.diff(None)
+    }
+    working_paths.update(git_inst.repo.untracked_files)
+    dirty_blocks = {path for path in working_paths if path.startswith(".blocks/")}
+    assert rel_path not in dirty_blocks, (
+        f"Unexpected object block diff after checkout: {rel_path}"
+    )
+    assert mesh_path not in dirty_blocks, (
+        f"Unexpected mesh block diff after checkout: {mesh_path}"
+    )

@@ -104,6 +104,7 @@ class BpyGit:
         self.diffs = None
         self.state = None  # unified current state, entries and blocks.
         self.last_branch = None
+        self.suspend_checks = False
 
         self.check_interval = check_interval
 
@@ -353,6 +354,8 @@ class BpyGit:
         so we can display diffs in the blender ui similar to vscode git extension and stay close to the
         intended functionality of git.
         """
+        if self.suspend_checks:
+            return self.check_interval
         prev_entries = self.state.get("entries") if self.state else None
         if prev_entries is None:
             prev_entries = {}
@@ -587,59 +590,68 @@ class BpyGit:
 
         6. Refresh UI and state tracking so that your Git panel updates (_update_diffs(), etc.).
         """
+        self.suspend_checks = True
         try:
-            if not self.repo.head.is_detached:
-                try:
-                    self.last_branch = self.repo.active_branch.name
-                except Exception:
-                    self.last_branch = None
-            self.repo.git.checkout("--detach", commit)
-        except Exception:
-            self.repo.git.checkout(commit)
-
-        self.manifest = WriteDict(
-            self.manifestpath
-        )  # re-read manifest from current commit
-        self._ensure_manifest_schema()
-
-        manifest_blocks = {}
-        if self.manifest is not None and isinstance(self.manifest, dict):
-            manifest_blocks = self.manifest.get(MANIFEST_BLOCKS_KEY, {})
-
-        valid_manifest_blocks = {}
-        for uuid, entry in manifest_blocks.items():
-            block_path = self.blockspath / f"{uuid}.json"
-            if block_path.exists():
-                valid_manifest_blocks[uuid] = entry
-            else:
-                print(f"[BpyGit] Missing block file for {uuid}: {block_path}")
-
-        # Get topological dependency load order for blocks:
-        load_order = self._topological_sort(
-            {MANIFEST_BLOCKS_KEY: valid_manifest_blocks}
-        )
-
-        # Load blocks into scene:
-        for uuid in load_order:
-            data = self._read(uuid)
-            if data.get("uuid") is None:
-                data["uuid"] = uuid
             try:
-                self.deserialize(data)
-            except Exception as e:
-                print(f"[BpyGit] Failed to restore block {uuid}: {e}")
+                if not self.repo.head.is_detached:
+                    try:
+                        self.last_branch = self.repo.active_branch.name
+                    except Exception:
+                        self.last_branch = None
+                self.repo.git.checkout("--detach", commit)
+            except Exception:
+                self.repo.git.checkout(commit)
 
-        # Cleanup orphaned data blocks that don't have references in the current commits manifest.
-        self._cleanup_orphans(valid=set(valid_manifest_blocks.keys()))
+            self.manifest = WriteDict(
+                self.manifestpath
+            )  # re-read manifest from current commit
+            self._ensure_manifest_schema()
 
-        # Update state
-        self._check()
+            manifest_blocks = {}
+            if self.manifest is not None and isinstance(self.manifest, dict):
+                manifest_blocks = self.manifest.get(MANIFEST_BLOCKS_KEY, {})
 
-        # Update diffs
-        self._update_diffs()
+            valid_manifest_blocks = {}
+            for uuid, entry in manifest_blocks.items():
+                block_path = self.blockspath / f"{uuid}.json"
+                if block_path.exists():
+                    valid_manifest_blocks[uuid] = entry
+                else:
+                    print(f"[BpyGit] Missing block file for {uuid}: {block_path}")
 
-        # Redraw panel
-        redraw("COZYSTUDIO_PT_panel")
+            # Get topological dependency load order for blocks:
+            load_order = self._topological_sort(
+                {MANIFEST_BLOCKS_KEY: valid_manifest_blocks}
+            )
+
+            # Load blocks into scene:
+            for uuid in load_order:
+                data = self._read(uuid)
+                if data.get("uuid") is None:
+                    data["uuid"] = uuid
+                try:
+                    self.deserialize(data)
+                except Exception as e:
+                    print(f"[BpyGit] Failed to restore block {uuid}: {e}")
+
+            # Cleanup orphaned data blocks that don't have references in the current commits manifest.
+            self._cleanup_orphans(valid=set(valid_manifest_blocks.keys()))
+
+            # Update state from current scene without writing files
+            entries, blocks, groups = self._current_state()
+            self.state = {
+                "entries": entries or {},
+                "blocks": blocks or {},
+                "groups": groups or {},
+            }
+
+            # Update diffs
+            self._update_diffs()
+
+            # Redraw panel
+            redraw("COZYSTUDIO_PT_panel")
+        finally:
+            self.suspend_checks = False
 
     def _read(self, cozystudio_uuid):
         """
