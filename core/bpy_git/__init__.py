@@ -7,6 +7,7 @@ import bpy
 import json
 import base64
 import traceback
+import math
 from pathlib import Path
 from fnmatch import fnmatch
 from deepdiff import DeepHash
@@ -18,7 +19,12 @@ from ...utils.timers import timers
 from ...utils.write import WriteDict
 from ...utils.redraw import redraw
 
-import base64
+MANIFEST_VERSION = 1
+MANIFEST_VERSION_KEY = "version"
+MANIFEST_BLOCKS_KEY = "blocks"
+MANIFEST_GROUP_KEY = "group_id"
+
+FLOAT_PRECISION = 6
 
 
 def default_json_encoder(obj):
@@ -39,6 +45,38 @@ def default_json_decoder(obj):
         return [default_json_decoder(x) for x in obj]
     else:
         return obj
+
+
+def _normalize_float(value: float) -> float | str:
+    if not math.isfinite(value):
+        return str(value)
+    return round(value, FLOAT_PRECISION)
+
+
+def normalize_json_data(value):
+    if isinstance(value, dict):
+        normalized = {}
+        for key in sorted(value.keys(), key=lambda k: str(k)):
+            normalized[str(key)] = normalize_json_data(value[key])
+        return normalized
+    if isinstance(value, (list, tuple)):
+        return [normalize_json_data(item) for item in value]
+    if isinstance(value, float):
+        return _normalize_float(value)
+    if isinstance(value, (bytes, bytearray)):
+        return default_json_encoder(value)
+    return value
+
+
+def serialize_json_data(data) -> str:
+    normalized = normalize_json_data(data)
+    return json.dumps(
+        normalized,
+        indent=2,
+        sort_keys=True,
+        ensure_ascii=True,
+        default=default_json_encoder,
+    )
 
 
 class BpyGit:
@@ -93,6 +131,7 @@ class BpyGit:
             if self.manifestpath.exists():
                 # Load existing manifest
                 self.manifest = WriteDict(self.manifestpath)
+                self._ensure_manifest_schema()
                 timers.register(self._check)
                 # only loading an existing one here, initiating one is handled in self.init()
         except Exception as e:
@@ -110,7 +149,13 @@ class BpyGit:
 
         if not self.initiated:
             os.mkdir(self.blockspath)
-            self.manifest = WriteDict(self.manifestpath)
+            self.manifest = WriteDict(
+                self.manifestpath,
+                data={
+                    MANIFEST_VERSION_KEY: MANIFEST_VERSION,
+                    MANIFEST_BLOCKS_KEY: {},
+                },
+            )
             self.repo = Repo.init(self.path)
             self.initiated = True
             timers.register(self._check)
@@ -124,6 +169,8 @@ class BpyGit:
         changes = self._filter_changes(changes)
         if not changes:
             return
+
+        self._ensure_state()
 
         for path in changes:
             file_path = Path(self.path, path)
@@ -148,6 +195,8 @@ class BpyGit:
         if not changes:
             return
 
+        self._ensure_state()
+
         try:
             if self.repo.head.is_valid():
                 # Equivalent to: git restore --staged <files>
@@ -169,6 +218,8 @@ class BpyGit:
         Basically: `git restore <file>`
         """
         changes = self._filter_changes(changes)
+
+        self._ensure_state()
 
         # ...
 
@@ -225,8 +276,15 @@ class BpyGit:
         if not changes:
             return
 
+        if self.manifest is None:
+            return
+
+        self._ensure_state()
+        self._ensure_manifest_schema()
+
         entries = self.state.get("entries", {})
         manifest = self.manifest
+        blocks = manifest.get(MANIFEST_BLOCKS_KEY, {})
 
         try:
             for rel_path in changes:
@@ -235,8 +293,8 @@ class BpyGit:
 
                 # Deleted or missing .blocks file → remove from manifest
                 if not block_path.exists():
-                    if block_uuid in manifest:
-                        del manifest[block_uuid]
+                    if block_uuid in blocks:
+                        del blocks[block_uuid]
                         print(
                             f"[BpyGit] Removed manifest entry for deleted block {block_uuid}"
                         )
@@ -245,10 +303,11 @@ class BpyGit:
                 # If present in current state → update manifest entry
                 current_entry = entries.get(block_uuid)
                 if current_entry:
-                    manifest[block_uuid] = {
+                    blocks[block_uuid] = {
                         "type": current_entry["type"],
                         "deps": current_entry.get("deps", []),
                         "hash": current_entry["hash"],
+                        MANIFEST_GROUP_KEY: current_entry.get(MANIFEST_GROUP_KEY),
                     }
                     print(f"[BpyGit] Updated manifest entry: {block_uuid}")
                 else:
@@ -444,7 +503,7 @@ class BpyGit:
         Also calls default_json_encoder for handling raw 64 bit data used in some data blocks.
         """
         data = self.bpy_protocol.dump(block)
-        return json.dumps(data, indent=2, default=default_json_encoder)
+        return serialize_json_data(data)
 
     def _current_state(self):
         """
@@ -470,13 +529,16 @@ class BpyGit:
                 if hasattr(db, "users") and db.users == 0:
                     continue
                 cozystudio_uuid = getattr(db, "cozystudio_uuid", None)
-                deps = [d.cozystudio_uuid for d in self.bpy_protocol.resolve_deps(db)]
+                if not cozystudio_uuid:
+                    continue
+                deps = self._resolve_deps(db)
                 target = self._serialize(db)
                 hash = DeepHash(target)
                 entries[cozystudio_uuid] = {
                     "type": impl_class.bl_id,
                     "deps": deps,
                     "hash": hash[target],
+                    MANIFEST_GROUP_KEY: None,
                 }
                 blocks[cozystudio_uuid] = target
 
@@ -514,6 +576,7 @@ class BpyGit:
         self.manifest = WriteDict(
             self.manifestpath
         )  # re-read manifest from current commit
+        self._ensure_manifest_schema()
 
         # Get topological dependency load order for blocks:
         load_order = self._topological_sort(self.manifest)
@@ -527,16 +590,7 @@ class BpyGit:
                 print(f"[BpyGit] Failed to restore block {uuid}: {e}")
 
         # Cleanup orphaned data blocks that don't have references in the current commits manifest.
-        all_valid = set(self.manifest.keys())
-        for type_name, impl_class in self.bpy_protocol.implementations.items():
-            data_collection = getattr(bpy.data, impl_class.bl_id, None)
-            if not data_collection:
-                continue
-            for block in list(data_collection):
-                pass
-                # uuid = getattr(block, "cozystudio_uuid", None)
-                # if uuid and uuid not in all_valid:
-                #     bpy.data.remove(block)
+        self._cleanup_orphans()
 
         # Update state
         self._check()
@@ -590,9 +644,13 @@ class BpyGit:
         """
         # Normalize into a {uuid: set(deps)} mapping
         if isinstance(manifest, dict):
-            deps = {uuid: set(v.get("deps", [])) for uuid, v in manifest.items()}
+            manifest = manifest.get(MANIFEST_BLOCKS_KEY, {})
+            deps = {
+                uuid: set(self._extract_dep_uuids(v.get("deps", [])))
+                for uuid, v in manifest.items()
+            }
         else:
-            deps = {e["cozystudio_uuid"]: set(e.get("deps", [])) for e in manifest}
+            deps = {}
 
         # Build reverse lookup: dep -> dependents
         dependents = defaultdict(set)
@@ -619,6 +677,125 @@ class BpyGit:
             raise ValueError(f"Dependency cycle detected: {cycles}")
 
         return order
+
+    def _ensure_state(self):
+        if self.state is None:
+            entries, blocks = self._current_state()
+            self.state = {"entries": entries or {}, "blocks": blocks or {}}
+
+    def _ensure_manifest_schema(self):
+        if self.manifest is None:
+            return
+
+        if (
+            MANIFEST_VERSION_KEY in self.manifest
+            and MANIFEST_BLOCKS_KEY in self.manifest
+            and isinstance(self.manifest.get(MANIFEST_BLOCKS_KEY), dict)
+        ):
+            if self.manifest.get(MANIFEST_VERSION_KEY) != MANIFEST_VERSION:
+                self.manifest[MANIFEST_VERSION_KEY] = MANIFEST_VERSION
+                self.manifest.write()
+            return
+
+        self._ensure_state()
+        rebuilt_blocks = {}
+        for uuid, entry in (self.state or {}).get("entries", {}).items():
+            rebuilt_blocks[uuid] = {
+                "type": entry.get("type"),
+                "deps": entry.get("deps", []),
+                "hash": entry.get("hash"),
+                MANIFEST_GROUP_KEY: entry.get(MANIFEST_GROUP_KEY),
+            }
+
+        self.manifest.clear()
+        self.manifest[MANIFEST_VERSION_KEY] = MANIFEST_VERSION
+        self.manifest[MANIFEST_BLOCKS_KEY] = rebuilt_blocks
+        self.manifest.write()
+
+    def _normalize_path_dep(self, path_value: Path) -> str:
+        try:
+            if path_value.is_absolute():
+                try:
+                    return path_value.relative_to(self.path).as_posix()
+                except ValueError:
+                    return path_value.as_posix()
+            return path_value.as_posix()
+        except Exception:
+            return str(path_value)
+
+    def _normalize_dep(self, dep):
+        if isinstance(dep, Path):
+            return {"file": self._normalize_path_dep(dep)}
+        if hasattr(dep, "cozystudio_uuid"):
+            dep_uuid = getattr(dep, "cozystudio_uuid", None)
+            if dep_uuid:
+                return dep_uuid
+        if isinstance(dep, str) and dep:
+            return dep
+        return None
+
+    def _resolve_deps(self, datablock) -> list:
+        deps = []
+        try:
+            raw_deps = self.bpy_protocol.resolve_deps(datablock)
+        except Exception as e:
+            print(f"[BpyGit] resolve_deps failed for {datablock}: {e}")
+            return deps
+
+        for dep in raw_deps or []:
+            normalized = self._normalize_dep(dep)
+            if normalized is None:
+                continue
+            if normalized not in deps:
+                deps.append(normalized)
+        return deps
+
+    def _extract_dep_uuids(self, deps) -> list[str]:
+        uuids = []
+        for dep in deps or []:
+            if isinstance(dep, str):
+                uuids.append(dep)
+            elif isinstance(dep, dict):
+                dep_uuid = dep.get("uuid")
+                if dep_uuid:
+                    uuids.append(dep_uuid)
+        return uuids
+
+    def _cleanup_orphans(self):
+        manifest_blocks = {}
+        if self.manifest is not None and isinstance(self.manifest, dict):
+            manifest_blocks = self.manifest.get(MANIFEST_BLOCKS_KEY, {})
+        valid = set(manifest_blocks.keys())
+
+        for type_name, impl_class in self.bpy_protocol.implementations.items():
+            data_collection = getattr(bpy.data, impl_class.bl_id, None)
+            if not data_collection:
+                continue
+            to_remove = []
+            for block in list(data_collection):
+                block_uuid = getattr(block, "cozystudio_uuid", None)
+                if block_uuid and block_uuid not in valid:
+                    to_remove.append(block)
+
+            to_remove.sort(
+                key=lambda block: (
+                    getattr(block, "cozystudio_uuid", ""),
+                    getattr(block, "name", ""),
+                )
+            )
+
+            for block in to_remove:
+                try:
+                    data_collection.remove(block, do_unlink=True)
+                except TypeError:
+                    try:
+                        data_collection.remove(block)
+                    except Exception as e:
+                        print(
+                            f"[BpyGit] Failed to remove orphan {block}: {e}"
+                        )
+                except Exception as e:
+                    print(f"[BpyGit] Failed to remove orphan {block}: {e}")
 
     # Experimental functions, only the above is solidified.
     """

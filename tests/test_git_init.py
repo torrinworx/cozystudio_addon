@@ -53,9 +53,7 @@ def test_initialize_git_repository():
 
     print("[GIT] Repository initialized successfully at:", git_path)
 
-    # For some reason .block json files aren't created as if the
-    time.sleep(10) # Maybe the git_intsance isn't registered with the timer?
-    print(git_inst)
-    # BpyGit instance confirmed existing: <cozystudio_addon.core.bpy_git.BpyGit object at 0x71611cab5410>
-    print(bpy.app.custom_timers_list)
-    assert False
+    # Verify .blocks directory was created
+    blocks_path = os.path.join(os.path.dirname(bpy.data.filepath), ".blocks")
+    assert os.path.exists(blocks_path) and os.path.isdir(blocks_path), \
+        f".blocks directory not found at expected path: {blocks_path}"
