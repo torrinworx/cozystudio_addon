@@ -64,6 +64,8 @@ class COZYSTUDIO_OT_CheckoutCommit(bpy.types.Operator):
     )
 
     def invoke(self, context, event):
+        if self.commit_hash:
+            return self.execute(context)
         # Show a popup dialog with a text field for commit hash
         return context.window_manager.invoke_props_dialog(self, width=400)
 
@@ -231,9 +233,48 @@ class MAIN_PT_Panel(bpy.types.Panel):
         layout.separator()
         layout.operator("cozystudio.commit", text="Commit")
 
-        layout.label(text="Test Checkout")
-        checkout_row = layout.row(align=True)
-        checkout_row.operator("cozystudio.checkout_commit", text="Checkout Commit", icon="FILE_REFRESH")
+        layout.label(text="Checkout")
+        repo = getattr(git_instance, "repo", None)
+        if repo is None:
+            layout.label(text="No repository available.")
+        else:
+            head_hash = None
+            try:
+                if repo.head.is_valid():
+                    head_hash = repo.head.commit.hexsha
+            except Exception:
+                head_hash = None
+
+            if head_hash:
+                layout.label(text=f"HEAD: {head_hash[:8]}")
+
+            has_changes = False
+            try:
+                git_instance._update_diffs()
+                has_changes = bool(getattr(git_instance, "diffs", None))
+            except Exception:
+                has_changes = False
+
+            if has_changes:
+                layout.label(text="Uncommitted changes present", icon="ERROR")
+
+            try:
+                commits = list(repo.iter_commits(max_count=10))
+            except Exception:
+                commits = []
+
+            if commits:
+                for commit in commits:
+                    row = layout.row(align=True)
+                    summary = commit.message.splitlines()[0] if commit.message else "(no message)"
+                    row.label(text=f"{commit.hexsha[:8]}  {summary}")
+                    op = row.operator("cozystudio.checkout_commit", text="Checkout", icon="FILE_REFRESH")
+                    op.commit_hash = commit.hexsha
+            else:
+                layout.label(text="No commits found.")
+
+            checkout_row = layout.row(align=True)
+            checkout_row.operator("cozystudio.checkout_commit", text="Checkout by Hash", icon="FILE_REFRESH")
 
 # Helper to display short status labels
 def _status_abbrev(status: str) -> str:
