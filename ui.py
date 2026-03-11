@@ -138,7 +138,7 @@ class MAIN_PT_Panel(bpy.types.Panel):
             return
 
         # Already initialized: show diffs if any
-        diffs = getattr(git_instance, "diffs", None)
+        diffs = getattr(git_instance, "diffs", None) or []
         staged = [d for d in diffs if d["status"].startswith("staged")]
         unstaged = [d for d in diffs if not d["status"].startswith("staged")]
 

@@ -15,19 +15,30 @@ blender_version = bpy.app.version
 
 modules = None
 ordered_classes = None
+registered_classes = []
 
 
 def init():
     global modules
     global ordered_classes
+    global registered_classes
 
     modules = get_all_submodules(Path(__file__).parent)
     ordered_classes = get_ordered_classes_to_register(modules)
+    registered_classes = []
 
 
 def register():
+    global registered_classes
+    if ordered_classes is None:
+        return
+
     for cls in ordered_classes:
-        bpy.utils.register_class(cls)
+        try:
+            bpy.utils.register_class(cls)
+            registered_classes.append(cls)
+        except Exception as e:
+            print("[CozyStudio] Error registering class:", cls, e)
 
     for module in modules:
         if module.__name__ == __name__:
@@ -37,8 +48,16 @@ def register():
 
 
 def unregister():
-    for cls in reversed(ordered_classes):
-        bpy.utils.unregister_class(cls)
+    global registered_classes
+    if ordered_classes is None:
+        return
+
+    for cls in reversed(registered_classes):
+        try:
+            bpy.utils.unregister_class(cls)
+        except Exception as e:
+            print("[CozyStudio] Error unregistering class:", cls, e)
+    registered_classes = []
 
     for module in modules:
         if module.__name__ == __name__:

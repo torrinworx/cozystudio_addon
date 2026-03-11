@@ -26,6 +26,7 @@ DEPENDENCIES_INSTALLED = False
 MISSING_DEPENDENCIES = []
 INSTALL_IN_PROGRESS = False
 auto_load_was_registered = False
+_core_classes_registered = False
 
 _install_thread = None
 _install_thread_error = None
@@ -152,13 +153,19 @@ class CozyStudioPreferences(bpy.types.AddonPreferences):
 
 def register():
     global DEPENDENCIES_INSTALLED, MISSING_DEPENDENCIES, auto_load_was_registered
+    global _core_classes_registered
 
     MISSING_DEPENDENCIES[:] = check_dependencies()
     DEPENDENCIES_INSTALLED = len(MISSING_DEPENDENCIES) == 0
     auto_load_was_registered = False
+    _core_classes_registered = False
 
-    bpy.utils.register_class(COZYSTUDIO_OT_install_deps)
-    bpy.utils.register_class(CozyStudioPreferences)
+    try:
+        bpy.utils.register_class(COZYSTUDIO_OT_install_deps)
+        bpy.utils.register_class(CozyStudioPreferences)
+        _core_classes_registered = True
+    except Exception as e:
+        print("[CozyStudio] Error registering core classes:", e)
 
     if DEPENDENCIES_INSTALLED:
         try:
@@ -184,5 +191,14 @@ def unregister():
         except Exception as e:
             print("[CozyStudio] Error in auto_load.unregister:", e)
 
-    bpy.utils.unregister_class(CozyStudioPreferences)
-    bpy.utils.unregister_class(COZYSTUDIO_OT_install_deps)
+    global _core_classes_registered
+    if _core_classes_registered:
+        try:
+            bpy.utils.unregister_class(CozyStudioPreferences)
+        except Exception as e:
+            print("[CozyStudio] Error unregistering preferences:", e)
+        try:
+            bpy.utils.unregister_class(COZYSTUDIO_OT_install_deps)
+        except Exception as e:
+            print("[CozyStudio] Error unregistering install operator:", e)
+    _core_classes_registered = False
