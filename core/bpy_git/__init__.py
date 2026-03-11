@@ -19,9 +19,10 @@ from ...utils.timers import timers
 from ...utils.write import WriteDict
 from ...utils.redraw import redraw
 
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2
 MANIFEST_VERSION_KEY = "version"
 MANIFEST_BLOCKS_KEY = "blocks"
+MANIFEST_GROUPS_KEY = "groups"
 MANIFEST_GROUP_KEY = "group_id"
 
 FLOAT_PRECISION = 6
@@ -154,6 +155,7 @@ class BpyGit:
                 data={
                     MANIFEST_VERSION_KEY: MANIFEST_VERSION,
                     MANIFEST_BLOCKS_KEY: {},
+                    MANIFEST_GROUPS_KEY: {},
                 },
             )
             self.repo = Repo.init(self.path)
@@ -283,6 +285,7 @@ class BpyGit:
         self._ensure_manifest_schema()
 
         entries = self.state.get("entries", {})
+        groups = self.state.get("groups", {})
         manifest = self.manifest
         blocks = manifest.get(MANIFEST_BLOCKS_KEY, {})
 
@@ -316,6 +319,7 @@ class BpyGit:
                     print(f"[BpyGit] Warning: {block_uuid} not in current state")
 
             # Write manifest to disk
+            manifest[MANIFEST_GROUPS_KEY] = groups
             manifest.write()
 
             # Stage manifest in Git
@@ -346,7 +350,7 @@ class BpyGit:
         if prev_entries is None:
             prev_entries = {}
 
-        entries, blocks = self._current_state()
+        entries, blocks, groups = self._current_state()
         if not entries:
             return self.check_interval
 
@@ -369,7 +373,7 @@ class BpyGit:
                 print(f"block added: {uuid}")
                 self._write_block_file(uuid, blocks[uuid])
 
-        self.state = {"entries": entries, "blocks": blocks}
+        self.state = {"entries": entries, "blocks": blocks, "groups": groups}
         self._update_diffs()
         return self.check_interval
 
@@ -517,6 +521,7 @@ class BpyGit:
         """
         entries = {}
         blocks = {}
+        db_by_uuid = {}
 
         for type_name, impl_class in self.bpy_protocol.implementations.items():
             if not hasattr(bpy.data, impl_class.bl_id):
@@ -541,8 +546,14 @@ class BpyGit:
                     MANIFEST_GROUP_KEY: None,
                 }
                 blocks[cozystudio_uuid] = target
+                db_by_uuid[cozystudio_uuid] = db
 
-        return entries, blocks
+        groups, group_ids = self._resolve_groups(entries, db_by_uuid)
+        for uuid, group_id in group_ids.items():
+            if uuid in entries:
+                entries[uuid][MANIFEST_GROUP_KEY] = group_id
+
+        return entries, blocks, groups
 
     def checkout(self, commit):
         """
@@ -685,8 +696,12 @@ class BpyGit:
 
     def _ensure_state(self):
         if self.state is None:
-            entries, blocks = self._current_state()
-            self.state = {"entries": entries or {}, "blocks": blocks or {}}
+            entries, blocks, groups = self._current_state()
+            self.state = {
+                "entries": entries or {},
+                "blocks": blocks or {},
+                "groups": groups or {},
+            }
 
     def _ensure_manifest_schema(self):
         if self.manifest is None:
@@ -696,6 +711,8 @@ class BpyGit:
             MANIFEST_VERSION_KEY in self.manifest
             and MANIFEST_BLOCKS_KEY in self.manifest
             and isinstance(self.manifest.get(MANIFEST_BLOCKS_KEY), dict)
+            and MANIFEST_GROUPS_KEY in self.manifest
+            and isinstance(self.manifest.get(MANIFEST_GROUPS_KEY), dict)
         ):
             if self.manifest.get(MANIFEST_VERSION_KEY) != MANIFEST_VERSION:
                 self.manifest[MANIFEST_VERSION_KEY] = MANIFEST_VERSION
@@ -715,7 +732,84 @@ class BpyGit:
         self.manifest.clear()
         self.manifest[MANIFEST_VERSION_KEY] = MANIFEST_VERSION
         self.manifest[MANIFEST_BLOCKS_KEY] = rebuilt_blocks
+        self.manifest[MANIFEST_GROUPS_KEY] = (self.state or {}).get("groups", {})
         self.manifest.write()
+
+    def _is_shared_block(self, uuid, entries, db_by_uuid) -> bool:
+        entry = entries.get(uuid)
+        if not entry:
+            return False
+        if entry.get("type") == "objects":
+            return False
+        datablock = db_by_uuid.get(uuid)
+        if datablock is None:
+            return False
+        if not hasattr(datablock, "users"):
+            return False
+        try:
+            return datablock.users > 1
+        except Exception:
+            return False
+
+    def _resolve_groups(self, entries, db_by_uuid):
+        deps_map = {}
+        for uuid, entry in entries.items():
+            deps_map[uuid] = set(self._extract_dep_uuids(entry.get("deps", [])))
+
+        shared = {
+            uuid
+            for uuid in entries
+            if self._is_shared_block(uuid, entries, db_by_uuid)
+        }
+
+        groups = {}
+        group_ids = {}
+
+        def ensure_group(root_uuid, group_type):
+            if root_uuid not in groups:
+                groups[root_uuid] = {
+                    "type": group_type,
+                    "root": root_uuid,
+                    "members": [],
+                }
+
+        def traverse_group(root_uuid, group_type):
+            ensure_group(root_uuid, group_type)
+            queue = deque([root_uuid])
+            while queue:
+                current = queue.popleft()
+                if current in group_ids:
+                    continue
+                group_ids[current] = root_uuid
+                groups[root_uuid]["members"].append(current)
+                for dep in sorted(deps_map.get(current, [])):
+                    if dep not in entries:
+                        continue
+                    if dep in group_ids:
+                        continue
+                    if dep in shared and dep != root_uuid:
+                        continue
+                    queue.append(dep)
+
+        object_roots = sorted(
+            [uuid for uuid, entry in entries.items() if entry.get("type") == "objects"]
+        )
+        for root_uuid in object_roots:
+            traverse_group(root_uuid, "object")
+
+        shared_roots = sorted([uuid for uuid in shared if uuid not in group_ids])
+        for root_uuid in shared_roots:
+            traverse_group(root_uuid, "shared")
+
+        for uuid in sorted(entries.keys()):
+            if uuid in group_ids:
+                continue
+            traverse_group(uuid, "orphan")
+
+        for group in groups.values():
+            group["members"].sort()
+
+        return groups, group_ids
 
     def _normalize_path_dep(self, path_value: Path) -> str:
         try:
