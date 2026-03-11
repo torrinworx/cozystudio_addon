@@ -83,8 +83,43 @@ class COZYSTUDIO_OT_install_deps(bpy.types.Operator):
 
     _timer = None
 
+    def _run_install_sync(self, context):
+        global _install_thread_error, INSTALL_IN_PROGRESS, auto_load_was_registered
+
+        _install_thread_error = None
+        INSTALL_IN_PROGRESS = True
+        install_packages()
+        INSTALL_IN_PROGRESS = False
+
+        if _install_thread_error:
+            self.report({"ERROR"}, _install_thread_error)
+            return {"CANCELLED"}
+        if MISSING_DEPENDENCIES:
+            self.report({"WARNING"}, "Still missing: " + ", ".join(MISSING_DEPENDENCIES))
+            return {"CANCELLED"}
+
+        try:
+            from . import auto_load
+
+            auto_load.init()
+            auto_load.register()
+            auto_load_was_registered = True
+        except ImportError:
+            pass
+        except Exception as e:
+            self.report({"ERROR"}, f"Auto-load failed: {e}")
+            return {"CANCELLED"}
+
+        return {"FINISHED"}
+
+    def execute(self, context):
+        return self._run_install_sync(context)
+
     def invoke(self, context, event):
         global _install_thread, INSTALL_IN_PROGRESS, _install_thread_error
+
+        if bpy.app.background or context.window is None:
+            return self._run_install_sync(context)
 
         if _install_thread and _install_thread.is_alive():
             self.report({"INFO"}, "Already installing.")

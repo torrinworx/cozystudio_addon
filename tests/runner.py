@@ -1,14 +1,9 @@
 """
 Create a clean test environment and run pytest inside Blender.
 
-Usage:
+Usage (from cozystudio_addon/):
 
-  1.  Install pytest and pytest-order into Blender's bundled Python:
-      /home/torrin/blender-4.5.3-linux-x64/4.5/python/bin/python3.11 -m pip install pytest pytest-order
-
-  2.  Run headless tests:
-      /home/torrin/blender-4.5.3-linux-x64/blender \
-          --background --python ./tests/runner.py -- /home/torrin/Data/Repos/Personal/Cone/
+  python test.py
 """
 
 import sys
@@ -21,8 +16,29 @@ import pytest
 
 
 # Helpers
+def ensure_pytest_installed():
+    try:
+        import pytest  # noqa: F401
+        import pytest_order  # noqa: F401
+        return
+    except Exception:
+        pass
+
+    subprocess.check_call(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            "pip",
+            "pytest",
+            "pytest-order",
+        ]
+    )
+
+
 def parse_requirements(path: Path):
-    """Return package names from a requirements.txt (ignore versions/comments)."""
     if not path.exists():
         return []
     pkgs = []
@@ -31,20 +47,6 @@ def parse_requirements(path: Path):
         if line and not line.startswith("#"):
             pkgs.append(line.split("==")[0].strip())
     return pkgs
-
-
-def uninstall_requirements(req_path: Path):
-    pkgs = parse_requirements(req_path)
-    if not pkgs:
-        return
-    try:
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "uninstall", "--yes", *pkgs],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception:
-        pass  # keep quiet; pytest will show failures if this matters
 
 
 def disable_addon(name: str):
@@ -80,6 +82,8 @@ if __name__ == "__main__":
     argv = argv[argv.index("--") + 1 :] if "--" in argv else []
     target_path = Path(argv[0]).absolute() if argv else Path.cwd()
 
+    ensure_pytest_installed()
+
     # Silence Blender's banner in pytest output
     print("\n\033[36m[ runner ] Preparing clean Blender test environment\033[0m")
 
@@ -94,7 +98,16 @@ if __name__ == "__main__":
     addon_src = Path(__file__).parent.parent.resolve()
 
     # reset environment for the addon
-    uninstall_requirements(addon_src / "requirements.txt")
+    try:
+        reqs = parse_requirements(addon_src / "requirements.txt")
+        if reqs:
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "uninstall", "--yes", *reqs],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+    except Exception:
+        pass
     disable_addon(addon_name)
     remove_existing_addons(addon_name)
 
@@ -113,6 +126,22 @@ if __name__ == "__main__":
     #  -q  : quiet start banner
     #  -rA : show test summary
     #  --color=yes : force colours when under Blender
+    install_code = pytest.main(
+        [
+            str(tests_dir),
+            "-vv",
+            "-q",
+            "--color=yes",
+            "--maxfail=1",
+            "--disable-warnings",
+            "-m",
+            "install",
+            "--ignore=tests/unit",
+        ]
+    )
+    if install_code != 0:
+        sys.exit(install_code)
+
     exit_code = pytest.main(
         [
             str(tests_dir),
@@ -121,6 +150,8 @@ if __name__ == "__main__":
             "--color=yes",
             "--maxfail=1",
             "--disable-warnings",
+            "-m",
+            "not install",
         ]
     )
 
