@@ -5,6 +5,8 @@ from pathlib import Path
 
 import bpy
 
+from cozystudio_addon.core.bpy_git.tracking import Track
+
 
 def parse_requirements(path: Path):
     if not path.exists():
@@ -112,3 +114,45 @@ def init_git_repo_for_test(ui_mod, timeout=5.0):
         raise RuntimeError(f".blocks directory not found at {blocks_dir}")
 
     return git_inst
+
+
+def create_test_object(name="CozyTestObject"):
+    mesh = bpy.data.meshes.new(name + "Mesh")
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj
+
+
+def ensure_tracking_assignments(git_inst):
+    Track(git_inst.bpy_protocol)._run_assign_loop()
+
+
+def wait_for_uuid(obj, timeout=3.0):
+    start = time.time()
+    while time.time() - start < timeout:
+        uuid = getattr(obj, "cozystudio_uuid", None)
+        if uuid:
+            return uuid
+        bpy.app.timers.is_registered
+        time.sleep(0.1)
+    return None
+
+
+def wait_for_block_file(git_inst, uuid, timeout=3.0):
+    start = time.time()
+    while time.time() - start < timeout:
+        block_path = git_inst.blockspath / f"{uuid}.json"
+        if block_path.exists():
+            return block_path
+        time.sleep(0.1)
+    return None
+
+
+def wait_for_object_prefix(prefix, timeout=3.0):
+    start = time.time()
+    while time.time() - start < timeout:
+        matches = [obj for obj in bpy.data.objects if obj.name.startswith(prefix)]
+        if matches:
+            return matches
+        time.sleep(0.1)
+    return []

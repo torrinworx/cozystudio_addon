@@ -531,7 +531,7 @@ class BpyGit:
                 cozystudio_uuid = getattr(db, "cozystudio_uuid", None)
                 if not cozystudio_uuid:
                     continue
-                deps = self._resolve_deps(db)
+                deps = self._resolve_deps(db, owner_uuid=cozystudio_uuid)
                 target = self._serialize(db)
                 hash = DeepHash(target)
                 entries[cozystudio_uuid] = {
@@ -652,6 +652,11 @@ class BpyGit:
         else:
             deps = {}
 
+        for uuid, ds in deps.items():
+            if uuid in ds:
+                ds.discard(uuid)
+            deps[uuid] = {dep for dep in ds if dep in deps}
+
         # Build reverse lookup: dep -> dependents
         dependents = defaultdict(set)
         for uuid, ds in deps.items():
@@ -734,7 +739,7 @@ class BpyGit:
             return dep
         return None
 
-    def _resolve_deps(self, datablock) -> list:
+    def _resolve_deps(self, datablock, owner_uuid=None) -> list:
         deps = []
         try:
             raw_deps = self.bpy_protocol.resolve_deps(datablock)
@@ -745,6 +750,8 @@ class BpyGit:
         for dep in raw_deps or []:
             normalized = self._normalize_dep(dep)
             if normalized is None:
+                continue
+            if owner_uuid and normalized == owner_uuid:
                 continue
             if normalized not in deps:
                 deps.append(normalized)
