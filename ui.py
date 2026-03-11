@@ -1,8 +1,9 @@
 import bpy
-from .core.bpy_git import BpyGit
+from pathlib import Path
 from bpy.app.handlers import persistent
 
 git_instance = None
+_bpy_git_import_error = None
 
 
 class INIT_OT_PrintOperator(bpy.types.Operator):
@@ -120,6 +121,50 @@ class COZYSTUDIO_OT_UnstageFile(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class COZYSTUDIO_OT_AddGroup(bpy.types.Operator):
+    bl_idname = "cozystudio.add_group"
+    bl_label = "Add group to stage"
+
+    group_id: bpy.props.StringProperty()
+
+    def execute(self, context):
+        global git_instance
+        if not git_instance or not getattr(git_instance, "state", None):
+            return {"CANCELLED"}
+
+        group = (git_instance.state.get("groups") or {}).get(self.group_id)
+        if not group:
+            return {"CANCELLED"}
+
+        members = group.get("members", [])
+        paths = [f".blocks/{uuid}.json" for uuid in members]
+        git_instance.stage(changes=paths)
+        git_instance._update_diffs()
+        return {"FINISHED"}
+
+
+class COZYSTUDIO_OT_UnstageGroup(bpy.types.Operator):
+    bl_idname = "cozystudio.unstage_group"
+    bl_label = "Unstage group"
+
+    group_id: bpy.props.StringProperty()
+
+    def execute(self, context):
+        global git_instance
+        if not git_instance or not getattr(git_instance, "state", None):
+            return {"CANCELLED"}
+
+        group = (git_instance.state.get("groups") or {}).get(self.group_id)
+        if not group:
+            return {"CANCELLED"}
+
+        members = group.get("members", [])
+        paths = [f".blocks/{uuid}.json" for uuid in members]
+        git_instance.unstage(changes=paths)
+        git_instance._update_diffs()
+        return {"FINISHED"}
+
+
 class MAIN_PT_Panel(bpy.types.Panel):
     bl_label = "Git"
     bl_idname = "COZYSTUDIO_PT_panel"
@@ -142,27 +187,46 @@ class MAIN_PT_Panel(bpy.types.Panel):
         staged = [d for d in diffs if d["status"].startswith("staged")]
         unstaged = [d for d in diffs if not d["status"].startswith("staged")]
 
+        grouped_staged = _group_diffs(git_instance, staged)
+        grouped_unstaged = _group_diffs(git_instance, unstaged)
+
         # --- Staged section ---
-        if staged:
+        if grouped_staged:
             box = layout.box()
             box.label(text="STAGED CHANGES", icon="CHECKMARK")
-            for diff in staged:
-                row = box.row(align=True)
-                row.label(text=diff["path"], icon="FILE")
-                op = row.operator("cozystudio.unstage_file", text="", icon="REMOVE")
-                op.file_path = diff["path"]
-                row.label(text=_status_abbrev(diff["status"]))
+            for group in grouped_staged:
+                group_box = box.box()
+                header = group_box.row(align=True)
+                header.label(text=group["label"], icon="FILE_FOLDER")
+                if group.get("group_id"):
+                    op = header.operator("cozystudio.unstage_group", text="", icon="REMOVE")
+                    op.group_id = group["group_id"]
+
+                for diff in group["diffs"]:
+                    row = group_box.row(align=True)
+                    row.label(text=_display_block_label(diff, group["name_cache"]), icon="FILE")
+                    op = row.operator("cozystudio.unstage_file", text="", icon="REMOVE")
+                    op.file_path = diff["path"]
+                    row.label(text=_status_abbrev(diff["status"]))
 
         # --- Unstaged section ---
-        if unstaged:
+        if grouped_unstaged:
             box = layout.box()
             box.label(text="CHANGES", icon="GREASEPENCIL")
-            for diff in unstaged:
-                row = box.row(align=True)
-                row.label(text=diff["path"], icon="FILE")
-                op = row.operator("cozystudio.add_file", text="", icon="ADD")
-                op.file_path = diff["path"]
-                row.label(text=_status_abbrev(diff["status"]))
+            for group in grouped_unstaged:
+                group_box = box.box()
+                header = group_box.row(align=True)
+                header.label(text=group["label"], icon="FILE_FOLDER")
+                if group.get("group_id"):
+                    op = header.operator("cozystudio.add_group", text="", icon="ADD")
+                    op.group_id = group["group_id"]
+
+                for diff in group["diffs"]:
+                    row = group_box.row(align=True)
+                    row.label(text=_display_block_label(diff, group["name_cache"]), icon="FILE")
+                    op = row.operator("cozystudio.add_file", text="", icon="ADD")
+                    op.file_path = diff["path"]
+                    row.label(text=_status_abbrev(diff["status"]))
 
         layout.separator()
         layout.operator("cozystudio.commit", text="Commit")
@@ -187,6 +251,119 @@ def _status_abbrev(status: str) -> str:
     return f"S:{letter}" if status.startswith("staged_") else letter
 
 
+def _extract_block_uuid(path: str) -> str | None:
+    if not path:
+        return None
+    if not path.startswith(".blocks/") or not path.endswith(".json"):
+        return None
+    try:
+        return Path(path).stem
+    except Exception:
+        return None
+
+
+def _build_name_cache(git_instance, entries):
+    name_cache = {}
+    if not git_instance or not entries:
+        return name_cache
+
+    for _type_name, impl_class in git_instance.bpy_protocol.implementations.items():
+        data_collection = getattr(bpy.data, impl_class.bl_id, None)
+        if not data_collection:
+            continue
+        for datablock in data_collection:
+            uuid = getattr(datablock, "cozystudio_uuid", None)
+            if not uuid or uuid not in entries:
+                continue
+            if uuid not in name_cache:
+                name_cache[uuid] = getattr(datablock, "name", None) or uuid
+
+    return name_cache
+
+
+def _group_label(group_id, group_meta, name_cache):
+    group_type = (group_meta or {}).get("type", "group")
+    root_uuid = (group_meta or {}).get("root", group_id)
+    name = name_cache.get(root_uuid) or root_uuid or "Group"
+
+    if group_type == "object":
+        prefix = "Object"
+    elif group_type == "shared":
+        prefix = "Shared"
+    elif group_type == "orphan":
+        prefix = "Orphan"
+    else:
+        prefix = "Group"
+
+    return f"{prefix}: {name}"
+
+
+def _display_block_label(diff, name_cache):
+    uuid = diff.get("uuid")
+    entry_type = diff.get("entry_type")
+    name = name_cache.get(uuid) or uuid or diff.get("path")
+    if entry_type:
+        return f"{name} ({entry_type})"
+    return name
+
+
+def _group_diffs(git_instance, diffs):
+    entries = (git_instance.state or {}).get("entries", {}) if git_instance else {}
+    groups = (git_instance.state or {}).get("groups", {}) if git_instance else {}
+    name_cache = _build_name_cache(git_instance, entries)
+
+    grouped = {}
+    ungrouped = []
+
+    for diff in diffs:
+        path = diff.get("path", "")
+        uuid = _extract_block_uuid(path)
+        if not uuid or uuid not in entries:
+            ungrouped.append(diff)
+            continue
+
+        group_id = entries[uuid].get("group_id") or uuid
+        entry_type = entries[uuid].get("type")
+        group = grouped.setdefault(
+            group_id,
+            {"group": groups.get(group_id), "diffs": []},
+        )
+        group["diffs"].append({**diff, "uuid": uuid, "entry_type": entry_type})
+
+    grouped_list = []
+    for group_id, data in grouped.items():
+        group_meta = data.get("group")
+        group_members = (group_meta or {}).get("members", [])
+        member_total = len(group_members) if group_members else len(data["diffs"])
+        label = _group_label(group_id, group_meta, name_cache)
+        if member_total >= len(data["diffs"]):
+            label = f"{label} ({len(data['diffs'])}/{member_total})"
+        else:
+            label = f"{label} ({len(data['diffs'])})"
+
+        grouped_list.append(
+            {
+                "group_id": group_id,
+                "label": label,
+                "diffs": sorted(data["diffs"], key=lambda d: d.get("path", "")),
+                "name_cache": name_cache,
+            }
+        )
+
+    if ungrouped:
+        grouped_list.append(
+            {
+                "group_id": None,
+                "label": f"Ungrouped ({len(ungrouped)})",
+                "diffs": sorted(ungrouped, key=lambda d: d.get("path", "")),
+                "name_cache": name_cache,
+            }
+        )
+
+    grouped_list.sort(key=lambda g: g.get("label", ""))
+    return grouped_list
+
+
 def is_data_restricted():
     try:
         _ = bpy.data.filepath
@@ -197,12 +374,20 @@ def is_data_restricted():
 
 def check_and_init_git():
     global git_instance
+    global _bpy_git_import_error
 
     if is_data_restricted():
         # Still restricted, reschedule to try again in 0.5 seconds
         return 0.5
 
-    git_instance = BpyGit()
+    if git_instance is None:
+        try:
+            from .core.bpy_git import BpyGit
+        except Exception as e:
+            _bpy_git_import_error = e
+            return 0.5
+
+        git_instance = BpyGit()
     return None
 
 

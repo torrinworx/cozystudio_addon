@@ -71,12 +71,21 @@ def unregister():
 
 
 def get_all_submodules(directory):
-    return list(iter_submodules(directory, __package__))
+    return [
+        module
+        for module in iter_submodules(directory, __package__)
+        if ".tests" not in module.__name__
+        and not module.__name__.endswith(".tests")
+        and not module.__name__.startswith(f"{__package__}.tests")
+    ]
 
 
 def iter_submodules(path, package_name):
     for name in sorted(iter_submodule_names(path)):
-        yield importlib.import_module("." + name, package_name)
+        try:
+            yield importlib.import_module("." + name, package_name)
+        except Exception as e:
+            print(f"[CozyStudio] Skipping module {package_name}.{name}: {e}")
 
 
 def iter_submodule_names(path, root=""):
