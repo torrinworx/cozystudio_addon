@@ -34,13 +34,18 @@ def test_git_flow_stage_commit_checkout():
 
     uuid = wait_for_uuid(test_obj)
     assert uuid, "Object UUID was not assigned"
+    mesh_uuid = wait_for_uuid(test_obj.data)
+    assert mesh_uuid, "Mesh UUID was not assigned"
 
     git_inst._check()
     block_path = wait_for_block_file(git_inst, uuid)
     assert block_path is not None, "Block file was not created"
 
     rel_path = f".blocks/{uuid}.json"
+    mesh_path = f".blocks/{mesh_uuid}.json"
     result = bpy.ops.cozystudio.add_file(file_path=rel_path)
+    assert "FINISHED" in result, f"add_file returned {result}"
+    result = bpy.ops.cozystudio.add_file(file_path=mesh_path)
     assert "FINISHED" in result, f"add_file returned {result}"
 
     git_inst._update_diffs()
@@ -55,6 +60,8 @@ def test_git_flow_stage_commit_checkout():
     assert rel_path not in staged_paths
 
     result = bpy.ops.cozystudio.add_file(file_path=rel_path)
+    assert "FINISHED" in result, f"add_file returned {result}"
+    result = bpy.ops.cozystudio.add_file(file_path=mesh_path)
     assert "FINISHED" in result, f"add_file returned {result}"
 
     result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Commit 1")
@@ -79,3 +86,43 @@ def test_git_flow_stage_commit_checkout():
 
     matrix = restored_data.get("transforms", {}).get("matrix_basis", [])
     assert matrix and abs(matrix[0][3] - 1.0) < 1e-4
+
+
+@pytest.mark.order(6)
+def test_deserialize_reuses_existing_object():
+    ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
+    git_inst = init_git_repo_for_test(ui_mod)
+
+    test_obj = create_test_object(name="CozyCheckoutObject")
+    test_obj.location.x = 1.0
+
+    ensure_tracking_assignments(git_inst)
+
+    uuid = wait_for_uuid(test_obj)
+    assert uuid, "Object UUID was not assigned"
+
+    git_inst._check()
+    block_path = wait_for_block_file(git_inst, uuid)
+    assert block_path is not None, "Block file was not created"
+
+    data = git_inst._read(uuid)
+    if data.get("uuid") is None:
+        data["uuid"] = uuid
+
+    matches = [
+        obj
+        for obj in bpy.data.objects
+        if getattr(obj, "cozystudio_uuid", None) == uuid
+        or getattr(obj, "uuid", None) == uuid
+    ]
+    assert matches, "No object found before deserialize"
+    assert len(matches) == 1
+
+    git_inst.deserialize(data)
+    matches = [
+        obj
+        for obj in bpy.data.objects
+        if getattr(obj, "cozystudio_uuid", None) == uuid
+        or getattr(obj, "uuid", None) == uuid
+    ]
+    assert len(matches) == 1, "Duplicate objects were created during deserialize"

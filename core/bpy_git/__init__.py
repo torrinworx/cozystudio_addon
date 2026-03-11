@@ -103,6 +103,7 @@ class BpyGit:
         self.initiated = False
         self.diffs = None
         self.state = None  # unified current state, entries and blocks.
+        self.last_branch = None
 
         self.check_interval = check_interval
 
@@ -110,8 +111,14 @@ class BpyGit:
             # Blender file is not saved yet. Save before using Git features. - TODO Add warning in blender
             return
 
+        git_dir = self.path / ".git"
+        if not git_dir.exists():
+            self.repo = None
+            self.initiated = False
+            return
+
         try:
-            self.repo = Repo(self.path)
+            self.repo = Repo(self.path, search_parent_directories=False)
             if self.repo.bare:
                 self.repo = None  # No repo found at current blender file
             else:
@@ -499,14 +506,14 @@ class BpyGit:
             print(traceback.format_exc())
             print(block_str)
 
-    def _serialize(self, block) -> str:
+    def _serialize(self, block, stamp_uuid=None) -> str:
         """
         Returns the serialized dictionary of a single data block.
         input: data block class
         returns: json string representing the data block
         Also calls default_json_encoder for handling raw 64 bit data used in some data blocks.
         """
-        data = self.bpy_protocol.dump(block)
+        data = self.bpy_protocol.dump(block, stamp_uuid=stamp_uuid)
         return serialize_json_data(data)
 
     def _current_state(self):
@@ -537,7 +544,7 @@ class BpyGit:
                 if not cozystudio_uuid:
                     continue
                 deps = self._resolve_deps(db, owner_uuid=cozystudio_uuid)
-                target = self._serialize(db)
+                target = self._serialize(db, stamp_uuid=cozystudio_uuid)
                 hash = DeepHash(target)
                 entries[cozystudio_uuid] = {
                     "type": impl_class.bl_id,
@@ -580,28 +587,50 @@ class BpyGit:
 
         6. Refresh UI and state tracking so that your Git panel updates (_update_diffs(), etc.).
         """
-        self.repo.git.checkout(
-            commit
-        )  # restore cozystudio.json + .blocks/ to that commit
+        try:
+            if not self.repo.head.is_detached:
+                try:
+                    self.last_branch = self.repo.active_branch.name
+                except Exception:
+                    self.last_branch = None
+            self.repo.git.checkout("--detach", commit)
+        except Exception:
+            self.repo.git.checkout(commit)
 
         self.manifest = WriteDict(
             self.manifestpath
         )  # re-read manifest from current commit
         self._ensure_manifest_schema()
 
+        manifest_blocks = {}
+        if self.manifest is not None and isinstance(self.manifest, dict):
+            manifest_blocks = self.manifest.get(MANIFEST_BLOCKS_KEY, {})
+
+        valid_manifest_blocks = {}
+        for uuid, entry in manifest_blocks.items():
+            block_path = self.blockspath / f"{uuid}.json"
+            if block_path.exists():
+                valid_manifest_blocks[uuid] = entry
+            else:
+                print(f"[BpyGit] Missing block file for {uuid}: {block_path}")
+
         # Get topological dependency load order for blocks:
-        load_order = self._topological_sort(self.manifest)
+        load_order = self._topological_sort(
+            {MANIFEST_BLOCKS_KEY: valid_manifest_blocks}
+        )
 
         # Load blocks into scene:
         for uuid in load_order:
             data = self._read(uuid)
+            if data.get("uuid") is None:
+                data["uuid"] = uuid
             try:
                 self.deserialize(data)
             except Exception as e:
                 print(f"[BpyGit] Failed to restore block {uuid}: {e}")
 
         # Cleanup orphaned data blocks that don't have references in the current commits manifest.
-        self._cleanup_orphans()
+        self._cleanup_orphans(valid=set(valid_manifest_blocks.keys()))
 
         # Update state
         self._check()
@@ -633,15 +662,26 @@ class BpyGit:
         if isinstance(type_id, (bytes, bytearray)):
             data["type_id"] = type_id.decode("utf-8", errors="ignore")
 
-        restored_data = self.bpy_protocol.construct(data)
+        restored_data = self.bpy_protocol.resolve(data)
+        if restored_data is None:
+            restored_data = self.bpy_protocol.construct(data)
         self.bpy_protocol.load(data, restored_data)
 
+        restored_uuid = data.get("uuid")
+        if restored_uuid:
+            if getattr(restored_data, "cozystudio_uuid", None) != restored_uuid:
+                restored_data.cozystudio_uuid = restored_uuid
+            if getattr(restored_data, "uuid", None) != restored_uuid:
+                restored_data.uuid = restored_uuid
+
         # Optional: link orphan Objects into the active scene as a fallback
-        if isinstance(restored_data, bpy.types.Object) and restored_data.users == 0:
-            try:
-                bpy.context.scene.collection.objects.link(restored_data)
-            except RuntimeError:
-                pass
+        if isinstance(restored_data, bpy.types.Object):
+            for scene in bpy.data.scenes:
+                if restored_data.name not in scene.objects:
+                    try:
+                        scene.collection.objects.link(restored_data)
+                    except RuntimeError:
+                        pass
 
         print(f"[BpyGit] Deserialized created: {restored_data}")
 
@@ -862,11 +902,12 @@ class BpyGit:
                     uuids.append(dep_uuid)
         return uuids
 
-    def _cleanup_orphans(self):
-        manifest_blocks = {}
-        if self.manifest is not None and isinstance(self.manifest, dict):
-            manifest_blocks = self.manifest.get(MANIFEST_BLOCKS_KEY, {})
-        valid = set(manifest_blocks.keys())
+    def _cleanup_orphans(self, valid=None):
+        if valid is None:
+            manifest_blocks = {}
+            if self.manifest is not None and isinstance(self.manifest, dict):
+                manifest_blocks = self.manifest.get(MANIFEST_BLOCKS_KEY, {})
+            valid = set(manifest_blocks.keys())
 
         for type_name, impl_class in self.bpy_protocol.implementations.items():
             data_collection = getattr(bpy.data, impl_class.bl_id, None)

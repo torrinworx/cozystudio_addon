@@ -246,7 +246,10 @@ class MAIN_PT_Panel(bpy.types.Panel):
                 head_hash = None
 
             if head_hash:
-                layout.label(text=f"HEAD: {head_hash[:8]}")
+                label = f"HEAD: {head_hash[:8]}"
+                if repo.head.is_detached:
+                    label = f"HEAD (detached): {head_hash[:8]}"
+                layout.label(text=label)
 
             has_changes = False
             try:
@@ -258,8 +261,23 @@ class MAIN_PT_Panel(bpy.types.Panel):
             if has_changes:
                 layout.label(text="Uncommitted changes present", icon="ERROR")
 
+            commits = []
             try:
-                commits = list(repo.iter_commits(max_count=10))
+                if repo.head.is_detached:
+                    preferred = getattr(git_instance, "last_branch", None)
+                    branch = None
+                    if preferred and preferred in repo.heads:
+                        branch = repo.heads[preferred]
+                    elif "main" in repo.heads:
+                        branch = repo.heads["main"]
+                    elif "master" in repo.heads:
+                        branch = repo.heads["master"]
+                    elif repo.heads:
+                        branch = repo.heads[0]
+                    if branch:
+                        commits = list(repo.iter_commits(branch.name, max_count=10))
+                if not commits:
+                    commits = list(repo.iter_commits(max_count=10))
             except Exception:
                 commits = []
 

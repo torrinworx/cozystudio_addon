@@ -151,7 +151,15 @@ def wait_for_block_file(git_inst, uuid, timeout=3.0):
 def wait_for_object_prefix(prefix, timeout=3.0):
     start = time.time()
     while time.time() - start < timeout:
+        if bpy.context.view_layer:
+            bpy.context.view_layer.update()
         matches = [obj for obj in bpy.data.objects if obj.name.startswith(prefix)]
+        if not matches and bpy.context.scene:
+            matches = [
+                obj
+                for obj in bpy.context.scene.objects
+                if obj.name.startswith(prefix)
+            ]
         if matches:
             return matches
         time.sleep(0.1)
