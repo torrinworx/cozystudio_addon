@@ -2,9 +2,11 @@ import bpy
 from pathlib import Path
 from bpy.app.handlers import persistent
 
+from .utils.redraw import redraw
+
 git_instance = None
 _bpy_git_import_error = None
-_group_collapsed = set()
+_group_expanded = set()
 
 
 class INIT_OT_PrintOperator(bpy.types.Operator):
@@ -130,19 +132,89 @@ class COZYSTUDIO_OT_ToggleGroupExpanded(bpy.types.Operator):
     group_id: bpy.props.StringProperty()
 
     def execute(self, context):
-        if self.group_id in _group_collapsed:
-            _group_collapsed.remove(self.group_id)
+        if self.group_id in _group_expanded:
+            _group_expanded.remove(self.group_id)
         else:
-            _group_collapsed.add(self.group_id)
+            _group_expanded.add(self.group_id)
+        return {"FINISHED"}
+
+
+class COZYSTUDIO_OT_CheckoutCommit(bpy.types.Operator):
+    """Checkout a specific commit hash"""
+    bl_idname = "cozystudio.checkout_commit"
+    bl_label = "Checkout Commit"
+
+    commit_hash: bpy.props.StringProperty(
+        name="Commit Hash",
+        description="Enter git commit hash to checkout",
+        default="",
+    )
+
+    def execute(self, context):
+        global git_instance
+
+        if not git_instance or not getattr(git_instance, "initiated", False):
+            self.report({"ERROR"}, "No CozyStudio Git repo initialized.")
+            return {"CANCELLED"}
+
+        if not self.commit_hash.strip():
+            self.report({"WARNING"}, "Please enter a commit hash.")
+            return {"CANCELLED"}
+
+        try:
+            print(f"[CozyStudio] Checking out commit {self.commit_hash}")
+            git_instance.checkout(self.commit_hash)
+            self.report({"INFO"}, f"Checked out commit {self.commit_hash[:8]}...")
+        except Exception as e:
+            self.report({"ERROR"}, f"Checkout failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"CANCELLED"}
+
+        return {"FINISHED"}
+
+
+class COZYSTUDIO_OT_CheckoutBranch(bpy.types.Operator):
+    """Checkout a branch"""
+    bl_idname = "cozystudio.checkout_branch"
+    bl_label = "Checkout Branch"
+
+    branch_name: bpy.props.StringProperty(
+        name="Branch",
+        description="Branch name to checkout",
+        default="",
+    )
+
+    def execute(self, context):
+        global git_instance
+
+        if not git_instance or not getattr(git_instance, "initiated", False):
+            self.report({"ERROR"}, "No CozyStudio Git repo initialized.")
+            return {"CANCELLED"}
+
+        if not self.branch_name.strip():
+            self.report({"WARNING"}, "Please enter a branch name.")
+            return {"CANCELLED"}
+
+        try:
+            git_instance.repo.git.checkout(self.branch_name)
+            self.report({"INFO"}, f"Checked out {self.branch_name}")
+        except Exception as e:
+            self.report({"ERROR"}, f"Checkout failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"CANCELLED"}
+
         return {"FINISHED"}
 
 
 class MAIN_PT_Panel(bpy.types.Panel):
-    bl_label = "Git"
+    bl_label = "Changes"
     bl_idname = "COZYSTUDIO_PT_panel"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Cozy Studio"
+    bl_order = 0
 
     def draw(self, context):
         layout = self.layout
@@ -172,7 +244,7 @@ class MAIN_PT_Panel(bpy.types.Panel):
                 group_id = group.get("group_id")
                 is_ungrouped = group_id is None
                 if not is_ungrouped:
-                    expanded = group_id not in _group_collapsed
+                    expanded = group_id in _group_expanded
                     icon = "TRIA_DOWN" if expanded else "TRIA_RIGHT"
                     op = header.operator(
                         "cozystudio.toggle_group_expanded",
@@ -212,7 +284,7 @@ class MAIN_PT_Panel(bpy.types.Panel):
                 group_id = group.get("group_id")
                 is_ungrouped = group_id is None
                 if not is_ungrouped:
-                    expanded = group_id not in _group_collapsed
+                    expanded = group_id in _group_expanded
                     icon = "TRIA_DOWN" if expanded else "TRIA_RIGHT"
                     op = header.operator(
                         "cozystudio.toggle_group_expanded",
@@ -244,6 +316,77 @@ class MAIN_PT_Panel(bpy.types.Panel):
 
         layout.separator()
         layout.operator("cozystudio.commit", text="Commit")
+
+
+class COZYSTUDIO_PT_LogPanel(bpy.types.Panel):
+    bl_label = "Log"
+    bl_idname = "COZYSTUDIO_PT_log"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Cozy Studio"
+    bl_order = 1
+
+    def draw(self, context):
+        layout = self.layout
+        global git_instance
+
+        if not git_instance or not getattr(git_instance, "initiated", False):
+            layout.label(text="No CozyStudio repo found.")
+            return
+
+        repo = getattr(git_instance, "repo", None)
+        if repo is None:
+            layout.label(text="No repository available.")
+            return
+
+        commits = []
+        try:
+            commits = list(repo.iter_commits(all=True, max_count=10))
+        except Exception:
+            commits = []
+
+        if repo.head.is_detached:
+            head_hash = None
+            try:
+                head_hash = repo.head.commit.hexsha
+            except Exception:
+                head_hash = None
+
+            if head_hash:
+                row = layout.row(align=True)
+                row.label(text=f"Detached at {head_hash[:8]}")
+
+                preferred = getattr(git_instance, "last_branch", None)
+                branch_name = None
+                if preferred and preferred in repo.heads:
+                    branch_name = preferred
+                elif "main" in repo.heads:
+                    branch_name = "main"
+                elif "master" in repo.heads:
+                    branch_name = "master"
+                elif repo.heads:
+                    branch_name = repo.heads[0].name
+
+                if branch_name:
+                    op = row.operator(
+                        "cozystudio.checkout_branch",
+                        text="Return",
+                        icon="LOOP_BACK",
+                    )
+                    op.branch_name = branch_name
+
+        if not commits:
+            layout.label(text="No commits found.")
+            return
+
+        for commit in commits:
+            row = layout.row(align=True)
+            summary = commit.message.splitlines()[0] if commit.message else "(no message)"
+            row.label(text=f"{commit.hexsha[:8]}  {summary}")
+            op = row.operator(
+                "cozystudio.checkout_commit", text="Checkout", icon="FILE_REFRESH"
+            )
+            op.commit_hash = commit.hexsha
 
 # Helper to display short status labels
 def _status_abbrev(status: str) -> str:
@@ -409,6 +552,12 @@ def check_and_init_git():
             return 0.5
 
         git_instance = BpyGit()
+
+    try:
+        if git_instance:
+            redraw("COZYSTUDIO_PT_log")
+    except Exception:
+        pass
     return None
 
 

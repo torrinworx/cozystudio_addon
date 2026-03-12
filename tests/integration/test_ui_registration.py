@@ -8,11 +8,13 @@ ADDON_MODULE = "cozystudio_addon"
 expected_ops = [
     "cozystudio.init_repo",
     "cozystudio.commit",
+    "cozystudio.checkout_commit",
+    "cozystudio.checkout_branch",
     "cozystudio.add_file",
     "cozystudio.unstage_file",
     "cozystudio.install_deps",
 ]
-expected_panels = ["COZYSTUDIO_PT_panel"]
+expected_panels = ["COZYSTUDIO_PT_panel", "COZYSTUDIO_PT_log"]
 
 
 @pytest.mark.order(3)

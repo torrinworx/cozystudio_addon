@@ -302,6 +302,7 @@ class BpyGit:
             self._update_diffs()
             self.repo.index.commit(message)
             self._update_diffs()
+            redraw("COZYSTUDIO_PT_log")
         except Exception as e:
             print(f"[BpyGit] Commit failed: {e}")
             print(traceback.format_exc())
@@ -675,6 +676,7 @@ class BpyGit:
 
             # Redraw panel
             redraw("COZYSTUDIO_PT_panel")
+            redraw("COZYSTUDIO_PT_log")
         finally:
             self.suspend_checks = False
 
