@@ -208,6 +208,73 @@ class COZYSTUDIO_OT_CheckoutBranch(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class COZYSTUDIO_OT_SelectBlock(bpy.types.Operator):
+    bl_idname = "cozystudio.select_block"
+    bl_label = "Select datablock"
+
+    uuid: bpy.props.StringProperty()
+
+    def execute(self, context):
+        global git_instance
+
+        if not git_instance or not getattr(git_instance, "initiated", False):
+            return {"CANCELLED"}
+
+        if not self.uuid:
+            return {"CANCELLED"}
+
+        datablock = None
+        for _type_name, impl_class in git_instance.bpy_protocol.implementations.items():
+            data_collection = getattr(bpy.data, impl_class.bl_id, None)
+            if not data_collection:
+                continue
+            for block in data_collection:
+                if getattr(block, "cozystudio_uuid", None) == self.uuid:
+                    datablock = block
+                    break
+            if datablock is not None:
+                break
+
+        if datablock is None:
+            return {"CANCELLED"}
+
+        if context.view_layer:
+            for obj in context.view_layer.objects:
+                obj.select_set(False)
+
+        selected = []
+        if isinstance(datablock, bpy.types.Object):
+            datablock.select_set(True)
+            selected = [datablock]
+        else:
+            for obj in bpy.data.objects:
+                if getattr(obj, "data", None) == datablock:
+                    obj.select_set(True)
+                    selected.append(obj)
+                    continue
+                materials = getattr(getattr(obj, "data", None), "materials", None)
+                if materials and datablock in materials:
+                    obj.select_set(True)
+                    selected.append(obj)
+
+        if selected and context.view_layer:
+            context.view_layer.objects.active = selected[0]
+
+        return {"FINISHED"}
+
+
+class COZYSTUDIO_UL_CommitList(bpy.types.UIList):
+    def draw_item(
+        self, context, layout, data, item, icon, active_data, active_propname, index
+    ):
+        split = layout.split(factor=0.86, align=True)
+        split.label(text=f"{item.short_hash}  {item.summary}")
+        op = split.operator(
+            "cozystudio.checkout_commit", text="", icon="FILE_REFRESH", emboss=True
+        )
+        op.commit_hash = item.commit_hash
+
+
 class MAIN_PT_Panel(bpy.types.Panel):
     bl_label = "Changes"
     bl_idname = "COZYSTUDIO_PT_panel"
@@ -263,10 +330,22 @@ class MAIN_PT_Panel(bpy.types.Panel):
                 if expanded:
                     for diff in group["diffs"]:
                         row = group_box.row(align=True)
-                        row.label(
-                            text=_display_block_label(diff, group["name_cache"]),
-                            icon="FILE",
-                        )
+                        uuid = diff.get("uuid")
+                        if uuid:
+                            op = row.operator(
+                                "cozystudio.select_block",
+                                text=_display_block_label(
+                                    diff, group["name_cache"]
+                                ),
+                                icon="FILE",
+                                emboss=False,
+                            )
+                            op.uuid = uuid
+                        else:
+                            row.label(
+                                text=_display_block_label(diff, group["name_cache"]),
+                                icon="FILE",
+                            )
                         if is_ungrouped:
                             op = row.operator(
                                 "cozystudio.unstage_file", text="", icon="REMOVE"
@@ -303,10 +382,22 @@ class MAIN_PT_Panel(bpy.types.Panel):
                 if expanded:
                     for diff in group["diffs"]:
                         row = group_box.row(align=True)
-                        row.label(
-                            text=_display_block_label(diff, group["name_cache"]),
-                            icon="FILE",
-                        )
+                        uuid = diff.get("uuid")
+                        if uuid:
+                            op = row.operator(
+                                "cozystudio.select_block",
+                                text=_display_block_label(
+                                    diff, group["name_cache"]
+                                ),
+                                icon="FILE",
+                                emboss=False,
+                            )
+                            op.uuid = uuid
+                        else:
+                            row.label(
+                                text=_display_block_label(diff, group["name_cache"]),
+                                icon="FILE",
+                            )
                         if is_ungrouped:
                             op = row.operator(
                                 "cozystudio.add_file", text="", icon="ADD"
@@ -345,6 +436,15 @@ class COZYSTUDIO_PT_LogPanel(bpy.types.Panel):
         except Exception:
             commits = []
 
+        wm = context.window_manager
+        items = wm.cozystudio_commit_items
+        items.clear()
+        for commit in commits:
+            item = items.add()
+            item.commit_hash = commit.hexsha
+            item.short_hash = commit.hexsha[:8]
+            item.summary = commit.message.splitlines()[0] if commit.message else "(no message)"
+
         if repo.head.is_detached:
             head_hash = None
             try:
@@ -379,14 +479,15 @@ class COZYSTUDIO_PT_LogPanel(bpy.types.Panel):
             layout.label(text="No commits found.")
             return
 
-        for commit in commits:
-            row = layout.row(align=True)
-            summary = commit.message.splitlines()[0] if commit.message else "(no message)"
-            row.label(text=f"{commit.hexsha[:8]}  {summary}")
-            op = row.operator(
-                "cozystudio.checkout_commit", text="Checkout", icon="FILE_REFRESH"
-            )
-            op.commit_hash = commit.hexsha
+        layout.template_list(
+            "COZYSTUDIO_UL_CommitList",
+            "",
+            wm,
+            "cozystudio_commit_items",
+            wm,
+            "cozystudio_commit_index",
+            rows=5,
+        )
 
 # Helper to display short status labels
 def _status_abbrev(status: str) -> str:
@@ -504,11 +605,17 @@ def _group_diffs(git_instance, diffs):
         )
 
     if ungrouped:
+        enriched = []
+        for diff in ungrouped:
+            path = diff.get("path", "")
+            uuid = _extract_block_uuid(path)
+            entry_type = entries.get(uuid, {}).get("type") if uuid else None
+            enriched.append({**diff, "uuid": uuid, "entry_type": entry_type})
         grouped_list.append(
             {
                 "group_id": None,
-                "label": f"Ungrouped ({len(ungrouped)})",
-                "diffs": sorted(ungrouped, key=lambda d: d.get("path", "")),
+                "label": f"Ungrouped ({len(enriched)})",
+                "diffs": sorted(enriched, key=lambda d: d.get("path", "")),
                 "name_cache": name_cache,
             }
         )
@@ -574,10 +681,28 @@ def register():
     if init_git_on_load not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(init_git_on_load)
 
+    bpy.types.WindowManager.cozystudio_commit_items = bpy.props.CollectionProperty(
+        type=COZYSTUDIO_CommitItem
+    )
+    bpy.types.WindowManager.cozystudio_commit_index = bpy.props.IntProperty(
+        default=0
+    )
+
 
 def unregister():
     if init_git_on_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(init_git_on_load)
 
+    if hasattr(bpy.types.WindowManager, "cozystudio_commit_items"):
+        del bpy.types.WindowManager.cozystudio_commit_items
+    if hasattr(bpy.types.WindowManager, "cozystudio_commit_index"):
+        del bpy.types.WindowManager.cozystudio_commit_index
+
     global git_instance
     git_instance = None
+
+
+class COZYSTUDIO_CommitItem(bpy.types.PropertyGroup):
+    commit_hash: bpy.props.StringProperty()
+    short_hash: bpy.props.StringProperty()
+    summary: bpy.props.StringProperty()

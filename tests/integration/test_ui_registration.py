@@ -10,6 +10,7 @@ expected_ops = [
     "cozystudio.commit",
     "cozystudio.checkout_commit",
     "cozystudio.checkout_branch",
+    "cozystudio.select_block",
     "cozystudio.add_file",
     "cozystudio.unstage_file",
     "cozystudio.install_deps",
