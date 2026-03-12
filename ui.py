@@ -36,8 +36,7 @@ class COMMMIT_OT_PrintOperator(bpy.types.Operator):
     )
 
     def invoke(self, context, event):
-        # Show a simple pop-up dialog to edit the message
-        return context.window_manager.invoke_props_dialog(self)
+        return self.execute(context)
 
     def draw(self, context):
         # Draw the message field inside the pop-up
@@ -47,12 +46,18 @@ class COMMMIT_OT_PrintOperator(bpy.types.Operator):
     def execute(self, context):
         global git_instance
 
-        if not self.message.strip():
+        message = (self.message or "").strip()
+        if not message:
+            message = (context.window_manager.cozystudio_commit_message or "").strip()
+
+        if not message:
             self.report({"WARNING"}, "Commit message cannot be empty")
             return {"CANCELLED"}
 
-        git_instance.commit(message=self.message)
-        self.report({"INFO"}, f"Committed: {self.message}")
+        git_instance.commit(message=message)
+        if hasattr(context.window_manager, "cozystudio_commit_message"):
+            context.window_manager.cozystudio_commit_message = ""
+        self.report({"INFO"}, f"Committed: {message}")
         return {"FINISHED"}
     
 class COZYSTUDIO_OT_AddFile(bpy.types.Operator):
@@ -319,7 +324,10 @@ class MAIN_PT_Panel(bpy.types.Panel):
             layout.operator("cozystudio.init_repo", text="Init Repository")
             return
 
-        # Already initialized: show diffs if any
+        # Already initialized: commit message input + diffs
+        layout.prop(context.window_manager, "cozystudio_commit_message", text="Message")
+        layout.separator()
+
         diffs = getattr(git_instance, "diffs", None) or []
         staged = [d for d in diffs if d["status"].startswith("staged")]
         unstaged = [d for d in diffs if not d["status"].startswith("staged")]
@@ -714,6 +722,11 @@ def register():
     bpy.types.WindowManager.cozystudio_commit_index = bpy.props.IntProperty(
         default=0
     )
+    bpy.types.WindowManager.cozystudio_commit_message = bpy.props.StringProperty(
+        name="Commit Message",
+        description="Message for this commit",
+        default="",
+    )
 
 
 def unregister():
@@ -724,6 +737,8 @@ def unregister():
         del bpy.types.WindowManager.cozystudio_commit_items
     if hasattr(bpy.types.WindowManager, "cozystudio_commit_index"):
         del bpy.types.WindowManager.cozystudio_commit_index
+    if hasattr(bpy.types.WindowManager, "cozystudio_commit_message"):
+        del bpy.types.WindowManager.cozystudio_commit_message
 
     global git_instance
     git_instance = None
