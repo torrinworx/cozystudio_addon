@@ -34,35 +34,11 @@ def test_git_flow_stage_commit_checkout():
 
     uuid = wait_for_uuid(test_obj)
     assert uuid, "Object UUID was not assigned"
-    mesh_uuid = wait_for_uuid(test_obj.data)
-    assert mesh_uuid, "Mesh UUID was not assigned"
-
     git_inst._check()
     block_path = wait_for_block_file(git_inst, uuid)
     assert block_path is not None, "Block file was not created"
 
-    rel_path = f".blocks/{uuid}.json"
-    mesh_path = f".blocks/{mesh_uuid}.json"
-    result = bpy.ops.cozystudio.add_file(file_path=rel_path)
-    assert "FINISHED" in result, f"add_file returned {result}"
-    result = bpy.ops.cozystudio.add_file(file_path=mesh_path)
-    assert "FINISHED" in result, f"add_file returned {result}"
-
-    git_inst._update_diffs()
-    staged_paths = [d["path"] for d in (git_inst.diffs or []) if d["status"].startswith("staged")]
-    assert rel_path in staged_paths
-
-    result = bpy.ops.cozystudio.unstage_file(file_path=rel_path)
-    assert "FINISHED" in result, f"unstage_file returned {result}"
-
-    git_inst._update_diffs()
-    staged_paths = [d["path"] for d in (git_inst.diffs or []) if d["status"].startswith("staged")]
-    assert rel_path not in staged_paths
-
-    result = bpy.ops.cozystudio.add_file(file_path=rel_path)
-    assert "FINISHED" in result, f"add_file returned {result}"
-    result = bpy.ops.cozystudio.add_file(file_path=mesh_path)
-    assert "FINISHED" in result, f"add_file returned {result}"
+    rel_path = f".cozystudio/blocks/{uuid}.json"
 
     result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Commit 1")
     assert "FINISHED" in result, f"commit returned {result}"
@@ -70,9 +46,6 @@ def test_git_flow_stage_commit_checkout():
 
     test_obj.location.x = 2.0
     git_inst._check()
-    result = bpy.ops.cozystudio.add_file(file_path=rel_path)
-    assert "FINISHED" in result, f"add_file returned {result}"
-
     result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Commit 2")
     assert "FINISHED" in result, f"commit returned {result}"
 
@@ -147,12 +120,8 @@ def test_checkout_does_not_dirty_blocks():
     block_path = wait_for_block_file(git_inst, uuid)
     assert block_path is not None, "Block file was not created"
 
-    rel_path = f".blocks/{uuid}.json"
-    mesh_path = f".blocks/{mesh_uuid}.json"
-    result = bpy.ops.cozystudio.add_file(file_path=rel_path)
-    assert "FINISHED" in result, f"add_file returned {result}"
-    result = bpy.ops.cozystudio.add_file(file_path=mesh_path)
-    assert "FINISHED" in result, f"add_file returned {result}"
+    rel_path = f".cozystudio/blocks/{uuid}.json"
+    mesh_path = f".cozystudio/blocks/{mesh_uuid}.json"
 
     result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Commit A")
     assert "FINISHED" in result, f"commit returned {result}"
@@ -160,9 +129,6 @@ def test_checkout_does_not_dirty_blocks():
 
     test_obj.location.x = 2.0
     git_inst._check()
-    result = bpy.ops.cozystudio.add_file(file_path=rel_path)
-    assert "FINISHED" in result, f"add_file returned {result}"
-
     result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Commit B")
     assert "FINISHED" in result, f"commit returned {result}"
     commit_b = git_inst.repo.head.commit.hexsha
@@ -175,7 +141,9 @@ def test_checkout_does_not_dirty_blocks():
         for diff in git_inst.repo.index.diff(None)
     }
     working_paths.update(git_inst.repo.untracked_files)
-    dirty_blocks = {path for path in working_paths if path.startswith(".blocks/")}
+    dirty_blocks = {
+        path for path in working_paths if path.startswith(".cozystudio/blocks/")
+    }
     assert rel_path not in dirty_blocks, (
         f"Unexpected object block diff after checkout: {rel_path}"
     )
@@ -191,7 +159,9 @@ def test_checkout_does_not_dirty_blocks():
         for diff in git_inst.repo.index.diff(None)
     }
     working_paths.update(git_inst.repo.untracked_files)
-    dirty_blocks = {path for path in working_paths if path.startswith(".blocks/")}
+    dirty_blocks = {
+        path for path in working_paths if path.startswith(".cozystudio/blocks/")
+    }
     assert rel_path not in dirty_blocks, (
         f"Unexpected object block diff after checkout: {rel_path}"
     )

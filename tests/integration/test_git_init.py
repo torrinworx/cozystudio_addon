@@ -1,6 +1,11 @@
 import importlib
+import json
+import tempfile
+import time
+from pathlib import Path
 
 import pytest
+import bpy
 
 from ..helpers import init_git_repo_for_test
 
@@ -12,3 +17,45 @@ def test_initialize_git_repository():
     ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
     git_inst = init_git_repo_for_test(ui_mod)
     assert git_inst is not None
+
+
+@pytest.mark.order(99)
+def test_new_file_save_init_commit_flow():
+    ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        project_dir = Path(tmp_dir)
+        blend_path = project_dir / "TestProject.blend"
+
+        bpy.ops.wm.read_factory_settings(use_empty=False)
+        bpy.ops.wm.save_as_mainfile(filepath=str(blend_path))
+        bpy.ops.wm.open_mainfile(filepath=str(blend_path))
+
+        start = time.time()
+        while time.time() - start < 3.0:
+            ui_mod.check_and_init_git()
+            git_inst = getattr(ui_mod, "git_instance", None)
+            if git_inst is not None and getattr(git_inst, "path", None) == project_dir:
+                break
+            time.sleep(0.1)
+
+        git_inst = getattr(ui_mod, "git_instance", None)
+        assert git_inst is not None
+        assert git_inst.path == project_dir
+
+        result = bpy.ops.cozystudio.init_repo()
+        assert "FINISHED" in result, f"init_repo returned {result}"
+
+        git_inst._check()
+        manifest_path = project_dir / ".cozystudio" / "manifest.json"
+        assert manifest_path.exists()
+        blocks_path = project_dir / ".cozystudio" / "blocks"
+        assert blocks_path.exists()
+        assert any(blocks_path.iterdir())
+
+        with open(manifest_path, "r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        assert manifest.get("blocks")
+
+        git_inst.commit(message="Initial Commit")
+        assert git_inst.repo.head.is_valid()

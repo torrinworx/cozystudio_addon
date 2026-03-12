@@ -24,6 +24,7 @@ MANIFEST_VERSION_KEY = "version"
 MANIFEST_BLOCKS_KEY = "blocks"
 MANIFEST_GROUPS_KEY = "groups"
 MANIFEST_GROUP_KEY = "group_id"
+MANIFEST_BOOTSTRAP_KEY = "bootstrap"
 
 FLOAT_PRECISION = 6
 
@@ -95,8 +96,9 @@ class BpyGit:
         Track(self.bpy_protocol).start()
 
         self.path = Path(bpy.path.abspath("//")).resolve()
-        self.blockspath = Path(os.path.join(self.path, ".blocks"))
-        self.manifestpath = Path(os.path.join(self.path, "cozystudio.json"))
+        self.cozystudio_path = self.path / ".cozystudio"
+        self.blockspath = self.cozystudio_path / "blocks"
+        self.manifestpath = self.cozystudio_path / "manifest.json"
 
         self.repo = None
         self.manifest = None
@@ -123,7 +125,7 @@ class BpyGit:
             if self.repo.bare:
                 self.repo = None  # No repo found at current blender file
             else:
-                self.initiated = True  # Repo found at current blender file
+                self.initiated = False
         except (InvalidGitRepositoryError, NoSuchPathError):
             # TODO: Warning in blender: No valid Git repository detected in {self.path}
             self.repo = None
@@ -141,6 +143,8 @@ class BpyGit:
                 # Load existing manifest
                 self.manifest = WriteDict(self.manifestpath)
                 self._ensure_manifest_schema()
+                self._restore_from_manifest()
+                self.initiated = True
                 timers.register(self._check)
                 # only loading an existing one here, initiating one is handled in self.init()
         except Exception as e:
@@ -157,18 +161,38 @@ class BpyGit:
         """
 
         if not self.initiated:
-            os.mkdir(self.blockspath)
+            self.cozystudio_path.mkdir(exist_ok=True)
+            self.blockspath.mkdir(exist_ok=True)
+            bootstrap_name = self._bootstrap_name()
             self.manifest = WriteDict(
                 self.manifestpath,
                 data={
                     MANIFEST_VERSION_KEY: MANIFEST_VERSION,
                     MANIFEST_BLOCKS_KEY: {},
                     MANIFEST_GROUPS_KEY: {},
+                    MANIFEST_BOOTSTRAP_KEY: bootstrap_name,
                 },
             )
-            self.repo = Repo.init(self.path)
+            if self.repo is None:
+                self.repo = Repo.init(self.path)
             self.initiated = True
             timers.register(self._check)
+            self._check()
+            if self.manifest is not None:
+                rebuilt_blocks = {}
+                for uuid, entry in (self.state or {}).get("entries", {}).items():
+                    rebuilt_blocks[uuid] = {
+                        "type": entry.get("type"),
+                        "deps": entry.get("deps", []),
+                        "hash": entry.get("hash"),
+                        MANIFEST_GROUP_KEY: entry.get(MANIFEST_GROUP_KEY),
+                    }
+                self.manifest[MANIFEST_BLOCKS_KEY] = rebuilt_blocks
+                self.manifest[MANIFEST_GROUPS_KEY] = (self.state or {}).get(
+                    "groups", {}
+                )
+                self.manifest[MANIFEST_BOOTSTRAP_KEY] = self._bootstrap_name()
+                self.manifest.write()
 
     # ---- Staged changes ----
 
@@ -240,9 +264,28 @@ class BpyGit:
     def commit(self, message="CozyStudio Commit"):
         """
         Commit staged changes, and only include updated manifest entries
-        that correspond to staged .blocks files.
+        that correspond to staged .cozystudio/blocks files.
         """
         try:
+            self._check()
+            self._ensure_state()
+            if self.manifest is not None:
+                rebuilt_blocks = {}
+                for uuid, entry in (self.state or {}).get("entries", {}).items():
+                    rebuilt_blocks[uuid] = {
+                        "type": entry.get("type"),
+                        "deps": entry.get("deps", []),
+                        "hash": entry.get("hash"),
+                        MANIFEST_GROUP_KEY: entry.get(MANIFEST_GROUP_KEY),
+                    }
+                self.manifest[MANIFEST_BLOCKS_KEY] = rebuilt_blocks
+                self.manifest[MANIFEST_GROUPS_KEY] = (self.state or {}).get(
+                    "groups", {}
+                )
+                self.manifest[MANIFEST_BOOTSTRAP_KEY] = self._bootstrap_name()
+                self.manifest.write()
+            self._write_bootstrap_file()
+            self._stage_internal_files()
             self._update_diffs()
             self.repo.index.commit(message)
             self._update_diffs()
@@ -254,10 +297,15 @@ class BpyGit:
 
     def _filter_changes(self, changes):
         """
-        Simple re-useable filter to filer out .blend file and .blend1, and cozystudio.json from
-        git changes. We handle these files manually elsewhere, the user should never see them in the ui.
+        Simple re-useable filter to filer out internal files from git changes.
+        We handle these files manually elsewhere, the user should never see them in the ui.
         """
-        IGNORE_PATTERNS = ["*.blend", "*.blend1", "cozystudio.json"]
+        IGNORE_PATTERNS = [
+            "*.blend",
+            "*.blend1",
+            ".cozystudio/manifest",
+            ".cozystudio/manifest.json",
+        ]
 
         if not changes:
             return []
@@ -271,18 +319,18 @@ class BpyGit:
 
     def _manifest(self, changes: list[str]):
         """
-        Update cozystudio.json to reflect the .blocks/*.json changes being staged,
+        Update manifest.json to reflect the .cozystudio/blocks/*.json changes being staged,
         unstaged, or discarded.
 
         Rules:
-        - If a .blocks/<uuid>.json file was added or modified: update its manifest entry
+        - If a .cozystudio/blocks/<uuid>.json file was added or modified: update its manifest entry
             using current data from `self.state['entries']`.
-        - If a .blocks/<uuid>.json file was deleted: remove that block UUID from manifest.
-        - Then write cozystudio.json, and stage it in the repo for commit.
+        - If a .cozystudio/blocks/<uuid>.json file was deleted: remove that block UUID from manifest.
+        - Then write manifest.json, and stage it in the repo for commit.
         """
 
         # Filter out non-block changes
-        changes = [c for c in self._filter_changes(changes) if c.startswith(".blocks/")]
+        changes = [c for c in changes if c.startswith(".cozystudio/blocks/")]
         if not changes:
             return
 
@@ -302,7 +350,7 @@ class BpyGit:
                 block_path = Path(self.path, rel_path)
                 block_uuid = block_path.stem
 
-                # Deleted or missing .blocks file → remove from manifest
+                # Deleted or missing .cozystudio/blocks file → remove from manifest
                 if not block_path.exists():
                     if block_uuid in blocks:
                         del blocks[block_uuid]
@@ -368,18 +416,18 @@ class BpyGit:
         for uuid, entry in prev_entries.items():
             cur = entries.get(uuid)
             if cur is None:
-                # Delete .blocks/<uuid>.json file
+                # Delete .cozystudio/blocks/<uuid>.json file
                 print(f"block deleted: {uuid}")
                 self._delete_block_file(uuid)
             elif cur["hash"] != entry.get("hash"):
-                # re-write .blocks/<uuid>.json file
+                # re-write .cozystudio/blocks/<uuid>.json file
                 print(f"block hash changed: {uuid}")
                 self._write_block_file(uuid, blocks[uuid])
 
         # resolve added entry in prev_entries
         for uuid in entries.keys():
             if uuid not in prev_entries:
-                # write .blocks/<uuid>.json file
+                # write .cozystudio/blocks/<uuid>.json file
                 print(f"block added: {uuid}")
                 self._write_block_file(uuid, blocks[uuid])
 
@@ -453,7 +501,7 @@ class BpyGit:
                 )
 
         # Post-process: avoid double-listing files as both “unstaged” + “staged”
-        # if they appear in both sets.  Also filter out .blend, cozystudio.json, etc.
+        # if they appear in both sets.  Also filter out .blend, .cozystudio, etc.
         staged_paths = {
             d["path"] for d in diffs_list if d["status"].startswith("staged")
         }
@@ -469,7 +517,7 @@ class BpyGit:
                 continue
             unique_diffs.append(d)
 
-        # Filter out _.blend,_ .blend1, cozystudio.json, etc.
+        # Filter out _.blend,_ .blend1, .cozystudio, etc.
         filtered_paths = set(self._filter_changes(d["path"] for d in unique_diffs))
         final_diffs = [d for d in unique_diffs if d["path"] in filtered_paths]
 
@@ -480,7 +528,7 @@ class BpyGit:
 
     def _delete_block_file(self, cozystudio_uuid):
         """
-        Delete a given block written to the .blocks directory.
+        Delete a given block written to the .cozystudio/blocks directory.
         """
         try:
             block_file = self.blockspath / f"{cozystudio_uuid}.json"
@@ -497,7 +545,7 @@ class BpyGit:
 
     def _write_block_file(self, cozystudio_uuid, block_str):
         """
-        Writes a given data block to the .blocks directory. Assumes data is already
+        Writes a given data block to the .cozystudio/blocks directory. Assumes data is already
         serialized and 64 bit encoded where needed.
         """
         block_path = os.path.join(self.blockspath, f"{cozystudio_uuid}.json")
@@ -573,14 +621,14 @@ class BpyGit:
         1. Switch Git to that commit state (files, manifest, etc.).
         → e.g. do self.repo.git.checkout(commit_hash).
 
-        2. Load the manifest (cozystudio.json) from that commit.
+        2. Load the manifest (manifest.json) from that commit.
         → This gives you the authoritative list of all datablocks and their dependency graph at that point in time.
 
         3. Determine load order using topological_sort().
             Even though you said each commit includes all blocks, you still need deterministic order to ensure that blocks with dependencies are created after their dependencies exist in Blender.
 
         4. For each block in sorted order:
-            Read .blocks/<uuid>.json file via _read().
+            Read .cozystudio/blocks/<uuid>.json file via _read().
             Deserialize it into a Python dict (already handled by _read() + default_json_decoder()).
             Pass it to deserialize() to either:
                 Find an existing Blender datablock and update it via impl.load().
@@ -607,43 +655,7 @@ class BpyGit:
             )  # re-read manifest from current commit
             self._ensure_manifest_schema()
 
-            manifest_blocks = {}
-            if self.manifest is not None and isinstance(self.manifest, dict):
-                manifest_blocks = self.manifest.get(MANIFEST_BLOCKS_KEY, {})
-
-            valid_manifest_blocks = {}
-            for uuid, entry in manifest_blocks.items():
-                block_path = self.blockspath / f"{uuid}.json"
-                if block_path.exists():
-                    valid_manifest_blocks[uuid] = entry
-                else:
-                    print(f"[BpyGit] Missing block file for {uuid}: {block_path}")
-
-            # Get topological dependency load order for blocks:
-            load_order = self._topological_sort(
-                {MANIFEST_BLOCKS_KEY: valid_manifest_blocks}
-            )
-
-            # Load blocks into scene:
-            for uuid in load_order:
-                data = self._read(uuid)
-                if data.get("uuid") is None:
-                    data["uuid"] = uuid
-                try:
-                    self.deserialize(data)
-                except Exception as e:
-                    print(f"[BpyGit] Failed to restore block {uuid}: {e}")
-
-            # Cleanup orphaned data blocks that don't have references in the current commits manifest.
-            self._cleanup_orphans(valid=set(valid_manifest_blocks.keys()))
-
-            # Update state from current scene without writing files
-            entries, blocks, groups = self._current_state()
-            self.state = {
-                "entries": entries or {},
-                "blocks": blocks or {},
-                "groups": groups or {},
-            }
+            self._restore_from_manifest()
 
             # Update diffs
             self._update_diffs()
@@ -652,6 +664,47 @@ class BpyGit:
             redraw("COZYSTUDIO_PT_panel")
         finally:
             self.suspend_checks = False
+
+    def _restore_from_manifest(self):
+        """
+        Restore the current scene from the manifest and blocks on disk.
+        """
+        if self.manifest is None or not isinstance(self.manifest, dict):
+            return
+
+        manifest_blocks = self.manifest.get(MANIFEST_BLOCKS_KEY, {})
+
+        valid_manifest_blocks = {}
+        for uuid, entry in manifest_blocks.items():
+            block_path = self.blockspath / f"{uuid}.json"
+            if block_path.exists():
+                valid_manifest_blocks[uuid] = entry
+            else:
+                print(f"[BpyGit] Missing block file for {uuid}: {block_path}")
+
+        # Get topological dependency load order for blocks:
+        load_order = self._topological_sort({MANIFEST_BLOCKS_KEY: valid_manifest_blocks})
+
+        # Load blocks into scene:
+        for uuid in load_order:
+            data = self._read(uuid)
+            if data.get("uuid") is None:
+                data["uuid"] = uuid
+            try:
+                self.deserialize(data)
+            except Exception as e:
+                print(f"[BpyGit] Failed to restore block {uuid}: {e}")
+
+        # Cleanup orphaned data blocks that don't have references in the current commits manifest.
+        self._cleanup_orphans(valid=set(valid_manifest_blocks.keys()))
+
+        # Update state from current scene without writing files
+        entries, blocks, groups = self._current_state()
+        self.state = {
+            "entries": entries or {},
+            "blocks": blocks or {},
+            "groups": groups or {},
+        }
 
     def _read(self, cozystudio_uuid):
         """
@@ -769,6 +822,9 @@ class BpyGit:
             if self.manifest.get(MANIFEST_VERSION_KEY) != MANIFEST_VERSION:
                 self.manifest[MANIFEST_VERSION_KEY] = MANIFEST_VERSION
                 self.manifest.write()
+            if MANIFEST_BOOTSTRAP_KEY not in self.manifest:
+                self.manifest[MANIFEST_BOOTSTRAP_KEY] = self._bootstrap_name()
+                self.manifest.write()
             return
 
         self._ensure_state()
@@ -785,7 +841,54 @@ class BpyGit:
         self.manifest[MANIFEST_VERSION_KEY] = MANIFEST_VERSION
         self.manifest[MANIFEST_BLOCKS_KEY] = rebuilt_blocks
         self.manifest[MANIFEST_GROUPS_KEY] = (self.state or {}).get("groups", {})
+        self.manifest[MANIFEST_BOOTSTRAP_KEY] = self._bootstrap_name()
         self.manifest.write()
+
+    def _bootstrap_name(self):
+        if self.manifest is not None:
+            bootstrap_name = self.manifest.get(MANIFEST_BOOTSTRAP_KEY)
+            if isinstance(bootstrap_name, str) and bootstrap_name.endswith(".blend"):
+                return bootstrap_name
+
+        blend_path = bpy.data.filepath
+        if blend_path:
+            try:
+                blend_path = Path(blend_path)
+                if blend_path.parent.resolve() == self.path:
+                    return blend_path.name
+            except Exception:
+                pass
+
+        return f"{self.path.name}.blend"
+
+    def _bootstrap_path(self):
+        return self.path / self._bootstrap_name()
+
+    def _write_bootstrap_file(self):
+        if not self.initiated:
+            return
+        bootstrap_path = self._bootstrap_path()
+        try:
+            bpy.ops.wm.save_as_mainfile(filepath=str(bootstrap_path), copy=True)
+        except Exception as e:
+            print(f"[BpyGit] Failed to write bootstrap .blend: {e}")
+
+    def _stage_internal_files(self):
+        if not self.repo:
+            return
+        try:
+            rel_cz = os.path.relpath(self.cozystudio_path, self.path)
+            self.repo.git.add("-A", rel_cz)
+        except Exception as e:
+            print(f"[BpyGit] Failed to stage .cozystudio: {e}")
+
+        try:
+            bootstrap_path = self._bootstrap_path()
+            if bootstrap_path.exists():
+                bootstrap_rel = os.path.relpath(bootstrap_path, self.path)
+                self.repo.git.add(bootstrap_rel)
+        except Exception as e:
+            print(f"[BpyGit] Failed to stage bootstrap .blend: {e}")
 
     def _is_shared_block(self, uuid, entries, db_by_uuid) -> bool:
         entry = entries.get(uuid)

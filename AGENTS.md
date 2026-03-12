@@ -9,7 +9,7 @@ It is prescriptive. Use it as the ground rules and architecture memory.
 - If working inside a git submodule, always check for a nested `AGENTS.md` and follow it.
 
 ## PROJECT PHILOSOPHY
-- Datablocks are source of truth; `.blend` binaries are not versioned.
+- Datablocks are source of truth; `.blend` binaries are bootstraps only.
 - Prefer explicit, deterministic serialization over implicit magic.
 - Keep Git-facing behavior predictable and UI-driven.
 - READMEs are condensed, accurate summaries, not substitutes for code.
@@ -37,7 +37,8 @@ If a change violates a higher tier, it is wrong even if it "works."
 - Add-on registration must not assume dependencies are installed.
 - Dependency install happens via `cozystudio.install_deps` and only then auto-loads full module registration.
 - `BpyGit` only initializes once a `.blend` is saved and a repo exists or is created by the user.
-- `.blend` and `.blend1` are ignored in Git operations; `.blocks` + `cozystudio.json` are the tracked artifacts.
+- `.blend` is a committed bootstrap named after the project folder; `.blend1` is ignored.
+- `.cozystudio/manifest.json` + `.cozystudio/blocks/` are the tracked artifacts.
 
 ## CODING POLICY (STRICT)
 - No one-off helper functions. Inline unless reused in multiple places.
@@ -59,4 +60,4 @@ If a change violates a higher tier, it is wrong even if it "works."
 ## ECOSYSTEM CONTEXT
 - Blender data is tracked via `bl_types` serialization (extracted from multi-user).
 - Git operations are performed via GitPython within the Blender project folder.
-- Manifest (`cozystudio.json`) is the authoritative index of tracked datablocks.
+- Manifest (`.cozystudio/manifest.json`) is the authoritative index of tracked datablocks.

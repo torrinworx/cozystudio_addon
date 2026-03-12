@@ -107,11 +107,11 @@ def init_git_repo_for_test(ui_mod, timeout=5.0):
 
     project_dir = Path(os.path.dirname(bpy.data.filepath))
     git_dir = project_dir / ".git"
-    blocks_dir = project_dir / ".blocks"
+    blocks_dir = project_dir / ".cozystudio" / "blocks"
     if not git_dir.exists() or not git_dir.is_dir():
         raise RuntimeError(f".git directory not found at {git_dir}")
     if not blocks_dir.exists() or not blocks_dir.is_dir():
-        raise RuntimeError(f".blocks directory not found at {blocks_dir}")
+        raise RuntimeError(f".cozystudio/blocks directory not found at {blocks_dir}")
 
     return git_inst
 

@@ -139,7 +139,7 @@ class COZYSTUDIO_OT_AddGroup(bpy.types.Operator):
             return {"CANCELLED"}
 
         members = group.get("members", [])
-        paths = [f".blocks/{uuid}.json" for uuid in members]
+        paths = [f".cozystudio/blocks/{uuid}.json" for uuid in members]
         git_instance.stage(changes=paths)
         git_instance._update_diffs()
         return {"FINISHED"}
@@ -161,7 +161,7 @@ class COZYSTUDIO_OT_UnstageGroup(bpy.types.Operator):
             return {"CANCELLED"}
 
         members = group.get("members", [])
-        paths = [f".blocks/{uuid}.json" for uuid in members]
+        paths = [f".cozystudio/blocks/{uuid}.json" for uuid in members]
         git_instance.unstage(changes=paths)
         git_instance._update_diffs()
         return {"FINISHED"}
@@ -313,7 +313,7 @@ def _status_abbrev(status: str) -> str:
 def _extract_block_uuid(path: str) -> str | None:
     if not path:
         return None
-    if not path.startswith(".blocks/") or not path.endswith(".json"):
+    if not path.startswith(".cozystudio/blocks/") or not path.endswith(".json"):
         return None
     try:
         return Path(path).stem
@@ -438,6 +438,17 @@ def check_and_init_git():
     if is_data_restricted():
         # Still restricted, reschedule to try again in 0.5 seconds
         return 0.5
+
+    if not bpy.data.filepath:
+        return 0.5
+
+    current_path = Path(bpy.path.abspath("//")).resolve()
+    if git_instance is not None and current_path.exists():
+        try:
+            if getattr(git_instance, "path", None) != current_path:
+                git_instance = None
+        except Exception:
+            git_instance = None
 
     if git_instance is None:
         try:
