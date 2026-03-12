@@ -57,8 +57,7 @@ def test_git_flow_stage_commit_checkout():
     result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Commit 2")
     assert "FINISHED" in result, f"commit returned {result}"
 
-    result = bpy.ops.cozystudio.checkout_commit("EXEC_DEFAULT", commit_hash=commit1)
-    assert "FINISHED" in result, f"checkout_commit returned {result}"
+    git_inst.checkout(commit1)
 
     block_data_raw = git_inst.repo.git.show(f"{commit1}:{rel_path}")
     restored_data = json.loads(block_data_raw)
@@ -148,8 +147,7 @@ def test_checkout_does_not_dirty_blocks():
     assert "FINISHED" in result, f"commit returned {result}"
     commit_b = git_inst.repo.head.commit.hexsha
 
-    result = bpy.ops.cozystudio.checkout_commit("EXEC_DEFAULT", commit_hash=commit_a)
-    assert "FINISHED" in result, f"checkout_commit returned {result}"
+    git_inst.checkout(commit_a)
 
     working_paths = {
         diff.b_path or diff.a_path
@@ -166,8 +164,7 @@ def test_checkout_does_not_dirty_blocks():
         f"Unexpected mesh block diff after checkout: {mesh_path}"
     )
 
-    result = bpy.ops.cozystudio.checkout_commit("EXEC_DEFAULT", commit_hash=commit_b)
-    assert "FINISHED" in result, f"checkout_commit returned {result}"
+    git_inst.checkout(commit_b)
 
     working_paths = {
         diff.b_path or diff.a_path

@@ -8,7 +8,6 @@ ADDON_MODULE = "cozystudio_addon"
 expected_ops = [
     "cozystudio.init_repo",
     "cozystudio.commit",
-    "cozystudio.checkout_commit",
     "cozystudio.add_file",
     "cozystudio.unstage_file",
     "cozystudio.install_deps",

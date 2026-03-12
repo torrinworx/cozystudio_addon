@@ -53,51 +53,6 @@ class COMMMIT_OT_PrintOperator(bpy.types.Operator):
         self.report({"INFO"}, f"Committed: {self.message}")
         return {"FINISHED"}
     
-class COZYSTUDIO_OT_CheckoutCommit(bpy.types.Operator):
-    """Checkout a specific commit hash (testing)"""
-    bl_idname = "cozystudio.checkout_commit"
-    bl_label = "Checkout Commit"
-
-    commit_hash: bpy.props.StringProperty(
-        name="Commit Hash",
-        description="Enter git commit hash to checkout",
-        default="",
-    )
-
-    def invoke(self, context, event):
-        if self.commit_hash:
-            return self.execute(context)
-        # Show a popup dialog with a text field for commit hash
-        return context.window_manager.invoke_props_dialog(self, width=400)
-
-    def draw(self, context):
-        layout = self.layout
-        layout.prop(self, "commit_hash")
-
-    def execute(self, context):
-        global git_instance
-
-        if not git_instance or not getattr(git_instance, "initiated", False):
-            self.report({"ERROR"}, "No CozyStudio Git repo initialized.")
-            return {"CANCELLED"}
-
-        if not self.commit_hash.strip():
-            self.report({"WARNING"}, "Please enter a commit hash.")
-            return {"CANCELLED"}
-
-        try:
-            print(f"[CozyStudio] Checking out commit {self.commit_hash}")
-            git_instance.checkout(self.commit_hash)
-            self.report({"INFO"}, f"Checked out commit {self.commit_hash[:8]}...")
-        except Exception as e:
-            self.report({"ERROR"}, f"Checkout failed: {e}")
-            import traceback
-            traceback.print_exc()
-            return {"CANCELLED"}
-
-        return {"FINISHED"}
-
-
 class COZYSTUDIO_OT_AddFile(bpy.types.Operator):
     bl_idname = "cozystudio.add_file"
     bl_label = "Add file to stage"
@@ -289,67 +244,6 @@ class MAIN_PT_Panel(bpy.types.Panel):
 
         layout.separator()
         layout.operator("cozystudio.commit", text="Commit")
-
-        layout.label(text="Checkout")
-        repo = getattr(git_instance, "repo", None)
-        if repo is None:
-            layout.label(text="No repository available.")
-        else:
-            head_hash = None
-            try:
-                if repo.head.is_valid():
-                    head_hash = repo.head.commit.hexsha
-            except Exception:
-                head_hash = None
-
-            if head_hash:
-                label = f"HEAD: {head_hash[:8]}"
-                if repo.head.is_detached:
-                    label = f"HEAD (detached): {head_hash[:8]}"
-                layout.label(text=label)
-
-            has_changes = False
-            try:
-                git_instance._update_diffs()
-                has_changes = bool(getattr(git_instance, "diffs", None))
-            except Exception:
-                has_changes = False
-
-            if has_changes:
-                layout.label(text="Uncommitted changes present", icon="ERROR")
-
-            commits = []
-            try:
-                if repo.head.is_detached:
-                    preferred = getattr(git_instance, "last_branch", None)
-                    branch = None
-                    if preferred and preferred in repo.heads:
-                        branch = repo.heads[preferred]
-                    elif "main" in repo.heads:
-                        branch = repo.heads["main"]
-                    elif "master" in repo.heads:
-                        branch = repo.heads["master"]
-                    elif repo.heads:
-                        branch = repo.heads[0]
-                    if branch:
-                        commits = list(repo.iter_commits(branch.name, max_count=10))
-                if not commits:
-                    commits = list(repo.iter_commits(max_count=10))
-            except Exception:
-                commits = []
-
-            if commits:
-                for commit in commits:
-                    row = layout.row(align=True)
-                    summary = commit.message.splitlines()[0] if commit.message else "(no message)"
-                    row.label(text=f"{commit.hexsha[:8]}  {summary}")
-                    op = row.operator("cozystudio.checkout_commit", text="Checkout", icon="FILE_REFRESH")
-                    op.commit_hash = commit.hexsha
-            else:
-                layout.label(text="No commits found.")
-
-            checkout_row = layout.row(align=True)
-            checkout_row.operator("cozystudio.checkout_commit", text="Checkout by Hash", icon="FILE_REFRESH")
 
 # Helper to display short status labels
 def _status_abbrev(status: str) -> str:
