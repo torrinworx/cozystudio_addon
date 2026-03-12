@@ -264,6 +264,32 @@ class COZYSTUDIO_OT_SelectBlock(bpy.types.Operator):
 
 
 class COZYSTUDIO_UL_CommitList(bpy.types.UIList):
+    def filter_items(self, context, data, propname):
+        items = getattr(data, propname)
+        filter_text = (self.filter_name or "").strip().lower()
+
+        flt_flags = [self.bitflag_filter_item] * len(items)
+        if filter_text:
+            for idx, item in enumerate(items):
+                haystack = f"{item.commit_hash} {item.summary}".lower()
+                if filter_text not in haystack:
+                    flt_flags[idx] = 0
+
+        if self.use_filter_invert:
+            flt_flags = [
+                0 if flag == self.bitflag_filter_item else self.bitflag_filter_item
+                for flag in flt_flags
+            ]
+
+        flt_neworder = []
+        if self.use_filter_sort_alpha:
+            flt_neworder = sorted(
+                range(len(items)),
+                key=lambda i: (items[i].summary or "").lower(),
+            )
+
+        return flt_flags, flt_neworder
+
     def draw_item(
         self, context, layout, data, item, icon, active_data, active_propname, index
     ):
@@ -430,13 +456,14 @@ class COZYSTUDIO_PT_LogPanel(bpy.types.Panel):
             layout.label(text="No repository available.")
             return
 
+        wm = context.window_manager
+
         commits = []
         try:
             commits = list(repo.iter_commits(all=True, max_count=10))
         except Exception:
             commits = []
 
-        wm = context.window_manager
         items = wm.cozystudio_commit_items
         items.clear()
         for commit in commits:
