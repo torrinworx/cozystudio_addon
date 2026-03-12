@@ -263,12 +263,24 @@ class BpyGit:
 
     def commit(self, message="CozyStudio Commit"):
         """
-        Commit staged changes, and only include updated manifest entries
-        that correspond to staged .cozystudio/blocks files.
+        Commit staged changes, and ensure grouped datablocks are complete.
         """
         try:
             self._check()
             self._ensure_state()
+
+            entries = (self.state or {}).get("entries", {})
+            groups = (self.state or {}).get("groups", {})
+
+            staged_paths = {
+                path
+                for (path, stage) in self.repo.index.entries.keys()
+                if stage == 0
+            }
+            group_stage_paths = self._group_stage_paths(staged_paths, entries, groups)
+            if group_stage_paths:
+                self.stage(changes=group_stage_paths)
+
             if self.manifest is not None:
                 rebuilt_blocks = {}
                 for uuid, entry in (self.state or {}).get("entries", {}).items():
@@ -284,6 +296,7 @@ class BpyGit:
                 )
                 self.manifest[MANIFEST_BOOTSTRAP_KEY] = self._bootstrap_name()
                 self.manifest.write()
+
             self._write_bootstrap_file()
             self._stage_internal_files()
             self._update_diffs()
@@ -876,19 +889,47 @@ class BpyGit:
     def _stage_internal_files(self):
         if not self.repo:
             return
+
         try:
-            rel_cz = os.path.relpath(self.cozystudio_path, self.path)
-            self.repo.git.add("-A", rel_cz)
+            if self.manifestpath.exists():
+                manifest_rel = os.path.relpath(self.manifestpath, self.path)
+                self.repo.index.add([manifest_rel])
         except Exception as e:
-            print(f"[BpyGit] Failed to stage .cozystudio: {e}")
+            print(f"[BpyGit] Failed to stage manifest.json: {e}")
 
         try:
             bootstrap_path = self._bootstrap_path()
             if bootstrap_path.exists():
                 bootstrap_rel = os.path.relpath(bootstrap_path, self.path)
-                self.repo.git.add(bootstrap_rel)
+                self.repo.index.add([bootstrap_rel])
         except Exception as e:
             print(f"[BpyGit] Failed to stage bootstrap .blend: {e}")
+
+    @staticmethod
+    def _group_stage_paths(staged_paths, entries, groups):
+        staged_block_paths = {
+            path
+            for path in staged_paths
+            if path.startswith(".cozystudio/blocks/") and path.endswith(".json")
+        }
+        staged_uuids = {Path(path).stem for path in staged_block_paths}
+        staged_group_ids = set()
+        for uuid in staged_uuids:
+            entry = entries.get(uuid, {})
+            group_id = entry.get(MANIFEST_GROUP_KEY) or uuid
+            staged_group_ids.add(group_id)
+
+        group_stage_paths = set()
+        for group_id in staged_group_ids:
+            group_meta = groups.get(group_id)
+            members = (group_meta or {}).get("members", [])
+            if not members:
+                members = [group_id]
+            for member_uuid in members:
+                path = f".cozystudio/blocks/{member_uuid}.json"
+                group_stage_paths.add(path)
+
+        return sorted(group_stage_paths)
 
     def _is_shared_block(self, uuid, entries, db_by_uuid) -> bool:
         entry = entries.get(uuid)

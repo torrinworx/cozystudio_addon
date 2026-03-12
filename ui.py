@@ -4,6 +4,7 @@ from bpy.app.handlers import persistent
 
 git_instance = None
 _bpy_git_import_error = None
+_group_collapsed = set()
 
 
 class INIT_OT_PrintOperator(bpy.types.Operator):
@@ -167,6 +168,20 @@ class COZYSTUDIO_OT_UnstageGroup(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class COZYSTUDIO_OT_ToggleGroupExpanded(bpy.types.Operator):
+    bl_idname = "cozystudio.toggle_group_expanded"
+    bl_label = "Toggle group"
+
+    group_id: bpy.props.StringProperty()
+
+    def execute(self, context):
+        if self.group_id in _group_collapsed:
+            _group_collapsed.remove(self.group_id)
+        else:
+            _group_collapsed.add(self.group_id)
+        return {"FINISHED"}
+
+
 class MAIN_PT_Panel(bpy.types.Panel):
     bl_label = "Git"
     bl_idname = "COZYSTUDIO_PT_panel"
@@ -199,17 +214,38 @@ class MAIN_PT_Panel(bpy.types.Panel):
             for group in grouped_staged:
                 group_box = box.box()
                 header = group_box.row(align=True)
+                group_id = group.get("group_id")
+                is_ungrouped = group_id is None
+                if not is_ungrouped:
+                    expanded = group_id not in _group_collapsed
+                    icon = "TRIA_DOWN" if expanded else "TRIA_RIGHT"
+                    op = header.operator(
+                        "cozystudio.toggle_group_expanded",
+                        text="",
+                        icon=icon,
+                        emboss=False,
+                    )
+                    op.group_id = group_id
+                else:
+                    expanded = True
                 header.label(text=group["label"], icon="FILE_FOLDER")
-                if group.get("group_id"):
+                if group_id:
                     op = header.operator("cozystudio.unstage_group", text="", icon="REMOVE")
-                    op.group_id = group["group_id"]
+                    op.group_id = group_id
 
-                for diff in group["diffs"]:
-                    row = group_box.row(align=True)
-                    row.label(text=_display_block_label(diff, group["name_cache"]), icon="FILE")
-                    op = row.operator("cozystudio.unstage_file", text="", icon="REMOVE")
-                    op.file_path = diff["path"]
-                    row.label(text=_status_abbrev(diff["status"]))
+                if expanded:
+                    for diff in group["diffs"]:
+                        row = group_box.row(align=True)
+                        row.label(
+                            text=_display_block_label(diff, group["name_cache"]),
+                            icon="FILE",
+                        )
+                        if is_ungrouped:
+                            op = row.operator(
+                                "cozystudio.unstage_file", text="", icon="REMOVE"
+                            )
+                            op.file_path = diff["path"]
+                        row.label(text=_status_abbrev(diff["status"]))
 
         # --- Unstaged section ---
         if grouped_unstaged:
@@ -218,17 +254,38 @@ class MAIN_PT_Panel(bpy.types.Panel):
             for group in grouped_unstaged:
                 group_box = box.box()
                 header = group_box.row(align=True)
+                group_id = group.get("group_id")
+                is_ungrouped = group_id is None
+                if not is_ungrouped:
+                    expanded = group_id not in _group_collapsed
+                    icon = "TRIA_DOWN" if expanded else "TRIA_RIGHT"
+                    op = header.operator(
+                        "cozystudio.toggle_group_expanded",
+                        text="",
+                        icon=icon,
+                        emboss=False,
+                    )
+                    op.group_id = group_id
+                else:
+                    expanded = True
                 header.label(text=group["label"], icon="FILE_FOLDER")
-                if group.get("group_id"):
+                if group_id:
                     op = header.operator("cozystudio.add_group", text="", icon="ADD")
-                    op.group_id = group["group_id"]
+                    op.group_id = group_id
 
-                for diff in group["diffs"]:
-                    row = group_box.row(align=True)
-                    row.label(text=_display_block_label(diff, group["name_cache"]), icon="FILE")
-                    op = row.operator("cozystudio.add_file", text="", icon="ADD")
-                    op.file_path = diff["path"]
-                    row.label(text=_status_abbrev(diff["status"]))
+                if expanded:
+                    for diff in group["diffs"]:
+                        row = group_box.row(align=True)
+                        row.label(
+                            text=_display_block_label(diff, group["name_cache"]),
+                            icon="FILE",
+                        )
+                        if is_ungrouped:
+                            op = row.operator(
+                                "cozystudio.add_file", text="", icon="ADD"
+                            )
+                            op.file_path = diff["path"]
+                        row.label(text=_status_abbrev(diff["status"]))
 
         layout.separator()
         layout.operator("cozystudio.commit", text="Commit")

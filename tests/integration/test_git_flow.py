@@ -40,12 +40,20 @@ def test_git_flow_stage_commit_checkout():
 
     rel_path = f".cozystudio/blocks/{uuid}.json"
 
+    group_id = (
+        git_inst.state.get("entries", {}).get(uuid, {}).get("group_id") or uuid
+    )
+    result = bpy.ops.cozystudio.add_group("EXEC_DEFAULT", group_id=group_id)
+    assert "FINISHED" in result, f"add_group returned {result}"
+
     result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Commit 1")
     assert "FINISHED" in result, f"commit returned {result}"
     commit1 = git_inst.repo.head.commit.hexsha
 
     test_obj.location.x = 2.0
     git_inst._check()
+    result = bpy.ops.cozystudio.add_group("EXEC_DEFAULT", group_id=group_id)
+    assert "FINISHED" in result, f"add_group returned {result}"
     result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Commit 2")
     assert "FINISHED" in result, f"commit returned {result}"
 
@@ -123,12 +131,19 @@ def test_checkout_does_not_dirty_blocks():
     rel_path = f".cozystudio/blocks/{uuid}.json"
     mesh_path = f".cozystudio/blocks/{mesh_uuid}.json"
 
+    group_id = (
+        git_inst.state.get("entries", {}).get(uuid, {}).get("group_id") or uuid
+    )
+    result = bpy.ops.cozystudio.add_group("EXEC_DEFAULT", group_id=group_id)
+    assert "FINISHED" in result, f"add_group returned {result}"
     result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Commit A")
     assert "FINISHED" in result, f"commit returned {result}"
     commit_a = git_inst.repo.head.commit.hexsha
 
     test_obj.location.x = 2.0
     git_inst._check()
+    result = bpy.ops.cozystudio.add_group("EXEC_DEFAULT", group_id=group_id)
+    assert "FINISHED" in result, f"add_group returned {result}"
     result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Commit B")
     assert "FINISHED" in result, f"commit returned {result}"
     commit_b = git_inst.repo.head.commit.hexsha
