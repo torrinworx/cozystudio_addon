@@ -1,23 +1,15 @@
-# Cozy Studio Blender Add-on
+# Cozy Studio for Blender
 
-Cozy Studio is a Blender add-on that tracks Blender datablocks as plain JSON so project changes can be staged, committed, and restored in Git without versioning the binary `.blend` file directly or continusously recording user input.
+Cozy Studio is a Blender add-on that brings a Git-style workflow to your Blender projects. It tracks Blender datablocks as readable files so you can see meaningful changes without relying on raw `.blend` diffs, and commit from inside Blender.
 
-## What It Does
-- Tracks supported Blender datablocks and serializes them into `.blocks/<uuid>.json` files.
-- Maintains a manifest (`cozystudio.json`) with block metadata, dependencies, and grouping info.
-- Exposes a Git-style workflow inside Blender (stage, commit, checkout).
-- Uses GitPython to manage an on-disk repository in the Blender project folder.
+If you have ever wished Blender changes behaved more like code changes, Cozy Studio is built for that. You get a clean history of what changed, the ability to stage only the parts you want, and a workflow that stays inside Blender.
 
-## Install & Enable
-1. Install the add-on in Blender (zip or folder install).
-2. Enable it in Preferences.
-3. Click the “Install Dependencies” button in the add-on preferences.
+Get meaningful diffs based on Blender datablocks instead of binary files
 
-Dependencies are listed in `cozystudio_addon/requirements.txt` and are installed into Blender's Python environment.
+## How it stores changes
+Cozy Studio watches supported datablocks and writes them out as readable files. Those files are what you stage and commit. This keeps your history clear and reviewable while still working normally in Blender. This means you can do fancy things like this:
 
 [Screencast from 2026-03-11 22-57-20.webm](https://github.com/user-attachments/assets/dd081a9b-d05a-454a-84f5-aeebf6a0389a)
-
-
 
 ## Usage (In Blender)
 1. Save your `.blend` file to a folder that will become the project root.
@@ -28,27 +20,17 @@ Dependencies are listed in `cozystudio_addon/requirements.txt` and are installed
 6. Commit with a message.
 7. Use **Checkout** to restore previous commits (manifest-driven load order).
 
-## Tests
-The test harness runs pytest inside Blender.
+## Install
+1. Download the Cozy Studio add-on (zip or folder).
+2. In Blender: **Edit > Preferences > Add-ons > Install…**
+3. Enable **Cozy Studio**.
+4. In the add-on preferences, click **Install Dependencies**.
 
-From `cozystudio_addon/`:
-```bash
-python test.py
-```
+## Quick start
+1. Save your `.blend` in the folder you want as your project root.
+2. Open the **Cozy Studio** tab in the 3D View sidebar.
+3. Click **Init Repository**.
+4. Make changes, stage what you want, and commit from the panel.
 
-Environment overrides (copy `.env.example` to `.env`):
-- `COZYSTUDIO_BLENDER_BIN`: path to Blender binary
-- `COZYSTUDIO_TEST_DIR`: scratch directory for tests
-
-## Project Layout
-- `cozystudio_addon/__init__.py`: Blender entry point; dependency install + addon prefs.
-- `cozystudio_addon/auto_load.py`: module discovery and class registration order.
-- `cozystudio_addon/ui.py`: UI panel + Git operators (stage, commit, checkout).
-- `cozystudio_addon/core/bpy_git/`: Git-backed datablock serialization and checkout.
-- `cozystudio_addon/core/bpy_git/tracking.py`: assigns UUIDs to supported datablocks.
-- `cozystudio_addon/bl_types/`: datablock serialization protocol and implementations.
-- `cozystudio_addon/utils/`: timers, redraw, and JSON persistence helpers.
-
-## Notes
-- `.blend` and `.blend1` are intentionally ignored; only `.blocks` and the manifest are tracked.
-- The add-on expects Git to be available and uses GitPython for repository actions.
+## Issues
+If something doesn’t work, please open an issue with steps to reproduce.
