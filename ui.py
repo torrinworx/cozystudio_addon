@@ -54,10 +54,34 @@ class COMMMIT_OT_PrintOperator(bpy.types.Operator):
             self.report({"WARNING"}, "Commit message cannot be empty")
             return {"CANCELLED"}
 
-        git_instance.commit(message=message)
+        ok = git_instance.commit(message=message)
+        if not ok:
+            report = getattr(git_instance, "last_integrity_report", None)
+            if report and report.get("errors"):
+                self.report({"ERROR"}, report["errors"][0])
+            else:
+                self.report({"ERROR"}, "Commit failed")
+            return {"CANCELLED"}
         if hasattr(context.window_manager, "cozystudio_commit_message"):
             context.window_manager.cozystudio_commit_message = ""
         self.report({"INFO"}, f"Committed: {message}")
+        return {"FINISHED"}
+
+
+class COZYSTUDIO_OT_ManualRefresh(bpy.types.Operator):
+    bl_idname = "cozystudio.manual_refresh"
+    bl_label = "Refresh"
+
+    def execute(self, context):
+        global git_instance
+        if not git_instance or not getattr(git_instance, "initiated", False):
+            return {"CANCELLED"}
+
+        git_instance.refresh_all()
+        report = git_instance.validate_manifest_integrity()
+        git_instance.last_integrity_report = report
+        if not report.get("ok") and report.get("errors"):
+            self.report({"ERROR"}, report["errors"][0])
         return {"FINISHED"}
     
 class COZYSTUDIO_OT_AddFile(bpy.types.Operator):
@@ -326,6 +350,9 @@ class MAIN_PT_Panel(bpy.types.Panel):
 
         # Already initialized: commit message input + diffs
         layout.prop(context.window_manager, "cozystudio_commit_message", text="Message")
+        row = layout.row(align=True)
+        row.label(text="Auto refresh: 1s")
+        row.operator("cozystudio.manual_refresh", text="Refresh", icon="FILE_REFRESH")
         layout.separator()
 
         diffs = getattr(git_instance, "diffs", None) or []

@@ -164,3 +164,31 @@ def wait_for_object_prefix(prefix, timeout=3.0):
             return matches
         time.sleep(0.1)
     return []
+
+
+def get_repo_branch_name(repo):
+    if repo is None:
+        return None
+    try:
+        if not repo.head.is_detached:
+            return repo.active_branch.name
+    except Exception:
+        pass
+
+    if "main" in repo.heads:
+        return "main"
+    if "master" in repo.heads:
+        return "master"
+    if repo.heads:
+        return repo.heads[0].name
+    return None
+
+
+def clear_manifest_conflicts(git_inst):
+    manifest = getattr(git_inst, "manifest", None)
+    if not manifest or not isinstance(manifest, dict):
+        return
+    if "conflicts" not in manifest:
+        return
+    del manifest["conflicts"]
+    manifest.write()

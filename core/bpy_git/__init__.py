@@ -82,7 +82,7 @@ def serialize_json_data(data) -> str:
 
 
 class BpyGit:
-    def __init__(self, check_interval=5):
+    def __init__(self, check_interval=1.0):
         """
         Checks the current path, tries to load an exisitng bpy_git repo.
 
@@ -107,6 +107,7 @@ class BpyGit:
         self.state = None  # unified current state, entries and blocks.
         self.last_branch = None
         self.suspend_checks = False
+        self.last_integrity_report = None
 
         self.check_interval = check_interval
 
@@ -265,9 +266,24 @@ class BpyGit:
         """
         Commit staged changes, and ensure grouped datablocks are complete.
         """
+        if self.manifest is None or not self.repo:
+            return False
         try:
             self._check()
             self._ensure_state()
+
+            integrity = self.validate_manifest_integrity()
+            self.last_integrity_report = integrity
+            if not integrity.get("ok"):
+                print("[BpyGit] Commit blocked by manifest integrity errors:")
+                for err in integrity.get("errors", []):
+                    print(" -", err)
+                return False
+
+            conflicts = self.manifest.get("conflicts") if isinstance(self.manifest, dict) else None
+            if conflicts:
+                print("[BpyGit] Commit blocked: unresolved conflicts present.")
+                return False
 
             entries = (self.state or {}).get("entries", {})
             groups = (self.state or {}).get("groups", {})
@@ -303,9 +319,11 @@ class BpyGit:
             self.repo.index.commit(message)
             self._update_diffs()
             redraw("COZYSTUDIO_PT_log")
+            return True
         except Exception as e:
             print(f"[BpyGit] Commit failed: {e}")
             print(traceback.format_exc())
+            return False
         finally:
             self._update_diffs()
 
@@ -448,6 +466,15 @@ class BpyGit:
         self.state = {"entries": entries, "blocks": blocks, "groups": groups}
         self._update_diffs()
         return self.check_interval
+
+    def refresh_all(self):
+        """Force a full refresh of state, diffs, and UI panels."""
+        if not self.initiated:
+            return
+        self._check()
+        self._update_diffs()
+        redraw("COZYSTUDIO_PT_panel")
+        redraw("COZYSTUDIO_PT_log")
 
     def _update_diffs(self):
         """
@@ -671,6 +698,13 @@ class BpyGit:
 
             self._restore_from_manifest()
 
+            integrity = self.validate_manifest_integrity()
+            self.last_integrity_report = integrity
+            if not integrity.get("ok"):
+                print("[BpyGit] Manifest integrity issues after checkout:")
+                for err in integrity.get("errors", []):
+                    print(" -", err)
+
             # Update diffs
             self._update_diffs()
 
@@ -858,6 +892,381 @@ class BpyGit:
         self.manifest[MANIFEST_GROUPS_KEY] = (self.state or {}).get("groups", {})
         self.manifest[MANIFEST_BOOTSTRAP_KEY] = self._bootstrap_name()
         self.manifest.write()
+
+    def validate_manifest_integrity(self):
+        report = {"ok": True, "errors": [], "warnings": []}
+        if self.manifest is None:
+            report["ok"] = False
+            report["errors"].append("Manifest is not loaded.")
+            return report
+
+        if not isinstance(self.manifest, dict):
+            report["ok"] = False
+            report["errors"].append("Manifest is not a dictionary.")
+            return report
+
+        required_keys = [
+            MANIFEST_VERSION_KEY,
+            MANIFEST_BLOCKS_KEY,
+            MANIFEST_GROUPS_KEY,
+            MANIFEST_BOOTSTRAP_KEY,
+        ]
+        for key in required_keys:
+            if key not in self.manifest:
+                report["ok"] = False
+                report["errors"].append(f"Manifest missing key: {key}")
+
+        blocks = self.manifest.get(MANIFEST_BLOCKS_KEY)
+        if not isinstance(blocks, dict):
+            report["ok"] = False
+            report["errors"].append("Manifest blocks field is not a dict.")
+            blocks = {}
+
+        if not self.blockspath.exists():
+            report["ok"] = False
+            report["errors"].append("Blocks directory does not exist.")
+            return report
+
+        block_files = {
+            path.stem
+            for path in self.blockspath.iterdir()
+            if path.is_file() and path.name.endswith(".json")
+        }
+
+        for uuid in blocks.keys():
+            if uuid not in block_files:
+                report["ok"] = False
+                report["errors"].append(f"Missing block file for {uuid}.")
+
+        for uuid in block_files:
+            if uuid not in blocks:
+                report["warnings"].append(f"Block file not in manifest: {uuid}.")
+
+        conflicts = self.manifest.get("conflicts")
+        if conflicts:
+            report["ok"] = False
+            report["errors"].append("Unresolved conflicts present in manifest.")
+
+        return report
+
+    def merge(self, ref, strategy="manual"):
+        """
+        Merge a ref into current HEAD using datablock-aware rules.
+        strategy: "manual", "ours", or "theirs".
+        """
+        if not self.repo or not self.initiated:
+            return {"ok": False, "errors": ["Repository not initialized."], "conflicts": {}}
+        dirty_paths = self._dirty_paths()
+        if dirty_paths and not self._is_merge_safe_dirty(dirty_paths):
+            return {"ok": False, "errors": ["Working tree is dirty."], "conflicts": {}}
+
+        ours_ref = self.repo.head.commit.hexsha
+        try:
+            base_ref = self.repo.git.merge_base(ours_ref, ref).strip()
+        except Exception:
+            base_ref = None
+
+        result = self._merge_refs(base_ref, ours_ref, ref, strategy=strategy)
+        return result
+
+    def rebase(self, onto_ref, strategy="manual"):
+        """
+        Replay commits from current branch onto onto_ref using datablock-aware rules.
+        Leaves results in working tree; does not auto-commit.
+        """
+        if not self.repo or not self.initiated:
+            return {"ok": False, "errors": ["Repository not initialized."], "conflicts": {}}
+        dirty_paths = self._dirty_paths()
+        if dirty_paths and not self._is_merge_safe_dirty(dirty_paths):
+            return {"ok": False, "errors": ["Working tree is dirty."], "conflicts": {}}
+
+        head_ref = self.repo.head.commit.hexsha
+        commits = list(self.repo.iter_commits(f"{onto_ref}..{head_ref}", reverse=True))
+        if not commits:
+            return {"ok": True, "errors": [], "conflicts": {}}
+
+        try:
+            self.repo.git.checkout(onto_ref)
+        except Exception as e:
+            return {"ok": False, "errors": [f"Failed to checkout {onto_ref}: {e}"], "conflicts": {}}
+
+        for commit in commits:
+            parent = commit.parents[0].hexsha if commit.parents else None
+            result = self._merge_refs(parent, "WORKING_TREE", commit.hexsha, strategy=strategy)
+            if not result.get("ok"):
+                result["failed_commit"] = commit.hexsha
+                return result
+
+        return {"ok": True, "errors": [], "conflicts": {}}
+
+    def _merge_refs(self, base_ref, ours_ref, theirs_ref, strategy="manual"):
+        conflicts = {}
+        errors = []
+
+        base_manifest = self._load_manifest_at(base_ref) if base_ref else self._empty_manifest()
+        if ours_ref == "WORKING_TREE":
+            ours_manifest = self._load_manifest_working()
+        else:
+            ours_manifest = self._load_manifest_at(ours_ref)
+        theirs_manifest = self._load_manifest_at(theirs_ref)
+
+        base_blocks = base_manifest.get(MANIFEST_BLOCKS_KEY, {})
+        ours_blocks = ours_manifest.get(MANIFEST_BLOCKS_KEY, {})
+        theirs_blocks = theirs_manifest.get(MANIFEST_BLOCKS_KEY, {})
+
+        uuids = sorted(set(base_blocks.keys()) | set(ours_blocks.keys()) | set(theirs_blocks.keys()))
+        merged_blocks = {}
+
+        self.suspend_checks = True
+        try:
+            for uuid in uuids:
+                base_data = self._load_block_data(base_ref, uuid) if base_ref else None
+                ours_data = self._load_block_data(ours_ref, uuid)
+                theirs_data = self._load_block_data(theirs_ref, uuid)
+
+                tier = self._merge_tier_for_uuid(uuid, ours_blocks, theirs_blocks)
+                result = self._merge_block_data(base_data, ours_data, theirs_data, tier, strategy)
+
+                if result["conflict"]:
+                    conflicts[uuid] = result["reason"]
+                    if strategy == "ours":
+                        merged = ours_data
+                    elif strategy == "theirs":
+                        merged = theirs_data
+                    else:
+                        merged = ours_data
+                else:
+                    merged = result["data"]
+
+                if merged is not None:
+                    merged_blocks[uuid] = merged
+
+            self._write_merged_blocks(merged_blocks)
+            merged_manifest = self._merge_manifest_metadata(ours_manifest, theirs_manifest, merged_blocks)
+
+            if conflicts:
+                merged_manifest["conflicts"] = conflicts
+            elif "conflicts" in merged_manifest:
+                del merged_manifest["conflicts"]
+
+            self.manifest = WriteDict(self.manifestpath)
+            self.manifest.clear()
+            self.manifest.update(merged_manifest)
+            self.manifest.write()
+
+            self._restore_from_manifest()
+            self._update_diffs()
+            redraw("COZYSTUDIO_PT_panel")
+            redraw("COZYSTUDIO_PT_log")
+        except Exception as e:
+            errors.append(str(e))
+        finally:
+            self.suspend_checks = False
+
+        ok = not errors and (not conflicts or strategy in ("ours", "theirs"))
+        return {"ok": ok, "errors": errors, "conflicts": conflicts}
+
+    def _merge_tier_for_uuid(self, uuid, ours_blocks, theirs_blocks):
+        ours_entry = ours_blocks.get(uuid, {})
+        theirs_entry = theirs_blocks.get(uuid, {})
+        block_type = ours_entry.get("type") or theirs_entry.get("type")
+
+        tier_a = {"objects", "meshes", "collections"}
+        tier_b = {"materials", "images", "lights", "cameras", "scenes"}
+
+        if block_type in tier_a:
+            return "A"
+        if block_type in tier_b:
+            return "B"
+        return "C"
+
+    def _merge_block_data(self, base_data, ours_data, theirs_data, tier, strategy):
+        if ours_data == theirs_data:
+            return {"data": ours_data, "conflict": False}
+
+        if base_data is None:
+            if ours_data is None:
+                return {"data": theirs_data, "conflict": False}
+            if theirs_data is None:
+                return {"data": ours_data, "conflict": False}
+            return {"data": None, "conflict": True, "reason": "Both added different data."}
+
+        if ours_data == base_data:
+            return {"data": theirs_data, "conflict": False}
+        if theirs_data == base_data:
+            return {"data": ours_data, "conflict": False}
+
+        if tier == "A":
+            merged, conflict = self._three_way_merge_json(base_data, ours_data, theirs_data)
+            if conflict:
+                return {"data": None, "conflict": True, "reason": "Tier A merge conflict."}
+            return {"data": merged, "conflict": False}
+
+        if tier == "B":
+            return {"data": None, "conflict": True, "reason": "Tier B overlap conflict."}
+
+        return {"data": None, "conflict": True, "reason": "Tier C conflict."}
+
+    def _three_way_merge_json(self, base, ours, theirs):
+        if not isinstance(base, dict) or not isinstance(ours, dict) or not isinstance(theirs, dict):
+            if ours == theirs:
+                return ours, False
+            return None, True
+
+        merged = {}
+        conflict = False
+        keys = set(base.keys()) | set(ours.keys()) | set(theirs.keys())
+        for key in sorted(keys):
+            base_val = base.get(key)
+            ours_val = ours.get(key)
+            theirs_val = theirs.get(key)
+
+            if ours_val == theirs_val:
+                merged[key] = ours_val
+                continue
+            if ours_val == base_val:
+                merged[key] = theirs_val
+                continue
+            if theirs_val == base_val:
+                merged[key] = ours_val
+                continue
+
+            if isinstance(base_val, dict) and isinstance(ours_val, dict) and isinstance(theirs_val, dict):
+                child, child_conflict = self._three_way_merge_json(base_val, ours_val, theirs_val)
+                if child_conflict:
+                    conflict = True
+                    continue
+                merged[key] = child
+                continue
+
+            conflict = True
+
+        if conflict:
+            return None, True
+        return merged, False
+
+    def _load_manifest_at(self, ref):
+        if not ref:
+            return self._empty_manifest()
+
+        manifest_rel = os.path.relpath(self.manifestpath, self.path)
+        try:
+            raw = self.repo.git.show(f"{ref}:{manifest_rel}")
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                return self._empty_manifest()
+            return data
+        except Exception:
+            return self._empty_manifest()
+
+    def _load_manifest_working(self):
+        if not self.manifestpath.exists():
+            return self._empty_manifest()
+        try:
+            with open(self.manifestpath, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            if not isinstance(data, dict):
+                return self._empty_manifest()
+            return data
+        except Exception:
+            return self._empty_manifest()
+
+    def _empty_manifest(self):
+        return {
+            MANIFEST_VERSION_KEY: MANIFEST_VERSION,
+            MANIFEST_BLOCKS_KEY: {},
+            MANIFEST_GROUPS_KEY: {},
+            MANIFEST_BOOTSTRAP_KEY: self._bootstrap_name(),
+        }
+
+    def _load_block_data(self, ref, uuid):
+        if ref == "WORKING_TREE":
+            block_path = self.blockspath / f"{uuid}.json"
+            if not block_path.exists():
+                return None
+            with open(block_path, "r", encoding="utf-8") as handle:
+                return default_json_decoder(json.load(handle))
+
+        if not ref:
+            return None
+
+        block_rel = os.path.join(".cozystudio", "blocks", f"{uuid}.json")
+        try:
+            raw = self.repo.git.show(f"{ref}:{block_rel}")
+            return default_json_decoder(json.loads(raw))
+        except Exception:
+            return None
+
+    def _write_merged_blocks(self, merged_blocks):
+        existing = {
+            path.stem
+            for path in self.blockspath.iterdir()
+            if path.is_file() and path.name.endswith(".json")
+        }
+
+        for uuid in existing:
+            if uuid not in merged_blocks:
+                self._delete_block_file(uuid)
+
+        for uuid, data in merged_blocks.items():
+            serialized = serialize_json_data(data)
+            self._write_block_file(uuid, serialized)
+
+    def _merge_manifest_metadata(self, ours_manifest, theirs_manifest, merged_blocks):
+        ours_blocks = ours_manifest.get(MANIFEST_BLOCKS_KEY, {})
+        theirs_blocks = theirs_manifest.get(MANIFEST_BLOCKS_KEY, {})
+
+        merged_manifest = {
+            MANIFEST_VERSION_KEY: MANIFEST_VERSION,
+            MANIFEST_BLOCKS_KEY: {},
+            MANIFEST_GROUPS_KEY: ours_manifest.get(MANIFEST_GROUPS_KEY, {}),
+            MANIFEST_BOOTSTRAP_KEY: ours_manifest.get(MANIFEST_BOOTSTRAP_KEY, self._bootstrap_name()),
+        }
+
+        for uuid, data in merged_blocks.items():
+            entry = ours_blocks.get(uuid) or theirs_blocks.get(uuid)
+            if not entry:
+                continue
+
+            serialized = serialize_json_data(data)
+            hash_value = DeepHash(serialized)[serialized]
+            merged_manifest[MANIFEST_BLOCKS_KEY][uuid] = {
+                "type": entry.get("type"),
+                "deps": entry.get("deps", []),
+                "hash": hash_value,
+                MANIFEST_GROUP_KEY: entry.get(MANIFEST_GROUP_KEY),
+            }
+
+        return merged_manifest
+
+    def _dirty_paths(self):
+        if not self.repo:
+            return set()
+
+        dirty = set()
+        for diff in self.repo.index.diff(None):
+            dirty.add(diff.b_path or diff.a_path)
+        for path in self.repo.untracked_files:
+            dirty.add(path)
+        return {p for p in dirty if p}
+
+    def _is_merge_safe_dirty(self, dirty_paths):
+        allowed_patterns = [
+            ".cozystudio/blocks/*",
+            ".cozystudio/manifest.json",
+            ".cozystudio/manifest",
+            "*.blend",
+            "*.blend1",
+        ]
+
+        for path in dirty_paths:
+            if any(fnmatch(path, pattern) for pattern in allowed_patterns):
+                continue
+            if path.startswith(".cozystudio/blocks/"):
+                continue
+            return False
+
+        return True
 
     def _bootstrap_name(self):
         if self.manifest is not None:
