@@ -5,7 +5,7 @@ from pathlib import Path
 
 import bpy
 
-from cozystudio_addon.core.bpy_git.tracking import Track
+from cozystudio_addon.bl_git.tracking import Track
 
 
 def parse_requirements(path: Path):

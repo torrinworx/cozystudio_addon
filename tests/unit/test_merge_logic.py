@@ -1,6 +1,6 @@
 import json
 
-from cozystudio_addon.core.bpy_git import BpyGit
+from cozystudio_addon.bl_git import BpyGit
 
 
 def _merge(base, ours, theirs):

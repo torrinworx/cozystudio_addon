@@ -2,7 +2,7 @@ import json
 
 from deepdiff import DeepHash
 
-from cozystudio_addon.core.bpy_git import (
+from cozystudio_addon.bl_git import (
     default_json_decoder,
     normalize_json_data,
     serialize_json_data,

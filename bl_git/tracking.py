@@ -1,7 +1,7 @@
 import bpy
 import uuid
 
-from ...utils.timers import timers
+from ..utils.timers import timers
 
 class Track:
     """

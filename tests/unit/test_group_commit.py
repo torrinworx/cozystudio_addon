@@ -1,4 +1,4 @@
-from cozystudio_addon.core.bpy_git import BpyGit, MANIFEST_GROUP_KEY
+from cozystudio_addon.bl_git import BpyGit, MANIFEST_GROUP_KEY
 
 
 def test_group_stage_paths_returns_missing_members():

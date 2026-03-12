@@ -715,7 +715,7 @@ def check_and_init_git():
 
     if git_instance is None:
         try:
-            from .core.bpy_git import BpyGit
+            from .bl_git import BpyGit
         except Exception as e:
             _bpy_git_import_error = e
             return 0.5
