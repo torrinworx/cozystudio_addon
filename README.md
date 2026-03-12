@@ -14,9 +14,9 @@ Cozy Studio watches supported datablocks and writes them out as readable files. 
 ## Usage (In Blender)
 1. Save your `.blend` file to a folder that will become the project root.
 2. Open the **Cozy Studio** panel in the 3D View sidebar.
-3. Click **Init Repository** to create `.blocks/` and initialize a Git repo.
-4. Make Blender changes; the add-on writes/updates `.blocks/<uuid>.json` files.
-5. Stage individual files or groups from the panel.
+3. Click **Init Repository** to initialize a Git/CozyStudio repo.
+4. Make Blender changes; the add-on will automatically serialize and write the datablocks.
+5. Stage individual changes or groups from the panel.
 6. Commit with a message.
 7. Use **Checkout** to restore previous commits (manifest-driven load order).
 
@@ -25,12 +25,6 @@ Cozy Studio watches supported datablocks and writes them out as readable files. 
 2. In Blender: **Edit > Preferences > Add-ons > Install…**
 3. Enable **Cozy Studio**.
 4. In the add-on preferences, click **Install Dependencies**.
-
-## Quick start
-1. Save your `.blend` in the folder you want as your project root.
-2. Open the **Cozy Studio** tab in the 3D View sidebar.
-3. Click **Init Repository**.
-4. Make changes, stage what you want, and commit from the panel.
 
 ## Issues
 If something doesn’t work, please open an issue with steps to reproduce.
