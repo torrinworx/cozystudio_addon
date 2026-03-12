@@ -15,6 +15,10 @@ Cozy Studio is a Blender add-on that tracks Blender datablocks as plain JSON so 
 
 Dependencies are listed in `cozystudio_addon/requirements.txt` and are installed into Blender's Python environment.
 
+[Screencast from 2026-03-11 22-57-20.webm](https://github.com/user-attachments/assets/dd081a9b-d05a-454a-84f5-aeebf6a0389a)
+
+
+
 ## Usage (In Blender)
 1. Save your `.blend` file to a folder that will become the project root.
 2. Open the **Cozy Studio** panel in the 3D View sidebar.
