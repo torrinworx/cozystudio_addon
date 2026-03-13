@@ -1,14 +1,41 @@
+import json
 from collections import defaultdict, deque
 from pathlib import Path
 
 import bpy
 from deepdiff import DeepHash
 
-from .constants import MANIFEST_BLOCKS_KEY, MANIFEST_GROUP_KEY
+from .constants import MANIFEST_BLOCKS_KEY, MANIFEST_GROUP_KEY, MANIFEST_GROUPS_KEY
 from .json_io import serialize_json_data
 
 
 class StateMixin:
+    TYPE_LABELS = {
+        "objects": "object",
+        "meshes": "mesh",
+        "collections": "collection",
+        "materials": "material",
+        "actions": "animation",
+        "images": "image",
+        "cameras": "camera",
+        "lights": "light",
+        "worlds": "world",
+        "scenes": "scene",
+        "node_groups": "node group",
+        "textures": "texture",
+        "curves": "curve",
+        "fonts": "font",
+        "armatures": "armature",
+        "metaballs": "metaball",
+        "lightprobes": "light probe",
+        "volumes": "volume",
+        "speakers": "speaker",
+        "sounds": "sound",
+        "particles": "particle settings",
+        "grease_pencils": "grease pencil",
+        "grease_pencil": "grease pencil",
+    }
+
     def _empty_ui_state(self):
         return {
             "repo": {
@@ -53,6 +80,255 @@ class StateMixin:
                 "issues": [],
             },
         }
+
+    @classmethod
+    def _type_label(cls, datablock_type):
+        if not datablock_type:
+            return "datablock"
+        return cls.TYPE_LABELS.get(datablock_type, datablock_type.replace("_", " ").rstrip("s"))
+
+    @staticmethod
+    def _group_label(group_id, group_meta, name_cache):
+        group_type = (group_meta or {}).get("type", "group")
+        root_uuid = (group_meta or {}).get("root", group_id)
+        name = name_cache.get(root_uuid) or root_uuid or "Group"
+        if group_type == "object":
+            return f"Object: {name}"
+        if group_type == "shared":
+            return f"Shared: {name}"
+        if group_type == "orphan":
+            return f"Orphan: {name}"
+        return f"Group: {name}"
+
+    @staticmethod
+    def _load_json_file(file_path):
+        try:
+            with open(file_path, "r", encoding="utf-8") as handle:
+                return json.load(handle)
+        except Exception:
+            return None
+
+    def _load_json_for_source(self, rel_path, source):
+        if not rel_path:
+            return None
+        try:
+            if source == "WORKTREE":
+                return self._load_json_file(self.path / rel_path)
+            if source == "INDEX":
+                raw = self.repo.git.show(f":{rel_path}")
+            else:
+                raw = self.repo.git.show(f"{source}:{rel_path}")
+            return json.loads(raw)
+        except Exception:
+            return None
+
+    def _manifest_for_source(self, source):
+        if source == "WORKTREE":
+            return self._load_manifest_working()
+        if source == "INDEX":
+            manifest = self._load_json_for_source(
+                self.manifestpath.relative_to(self.path).as_posix(),
+                "INDEX",
+            )
+            return manifest if isinstance(manifest, dict) else self._empty_manifest()
+        if source == "HEAD":
+            if self.repo is None or not self.repo.head.is_valid():
+                return self._empty_manifest()
+            return self._load_manifest_at("HEAD")
+        return self._empty_manifest()
+
+    def _build_name_cache(self, entries):
+        name_cache = {}
+        if not entries:
+            return name_cache
+        for _type_name, impl_class in self.bpy_protocol.implementations.items():
+            data_collection = getattr(bpy.data, impl_class.bl_id, None)
+            if not data_collection:
+                continue
+            for datablock in data_collection:
+                uuid = getattr(datablock, "cozystudio_uuid", None)
+                if not uuid or uuid not in entries or uuid in name_cache:
+                    continue
+                name_cache[uuid] = getattr(datablock, "name", None) or uuid
+        return name_cache
+
+    @classmethod
+    def _summarize_block_diff(cls, status, datablock_type, before_block, after_block):
+        base_status = status.removeprefix("staged_")
+        type_label = cls._type_label(datablock_type)
+        if base_status in {"added", "untracked"}:
+            return f"Created {type_label}"
+        if base_status == "deleted":
+            return f"Deleted {type_label}"
+        if base_status == "renamed":
+            return f"Renamed {type_label}"
+        if base_status == "copied":
+            return f"Copied {type_label}"
+        if base_status == "typechange":
+            return f"Changed {type_label} type"
+        if not isinstance(before_block, dict) or not isinstance(after_block, dict):
+            return f"Updated {type_label}"
+
+        changed_keys = sorted(
+            {
+                key
+                for key in set(before_block.keys()) | set(after_block.keys())
+                if before_block.get(key) != after_block.get(key)
+            }
+        )
+        if not changed_keys:
+            return f"Updated {type_label}"
+
+        summaries = []
+        if "transforms" in changed_keys:
+            summaries.append("Transform changed")
+        if "parent_uid" in changed_keys:
+            summaries.append("Parenting changed")
+        if "objects" in changed_keys or "children" in changed_keys:
+            summaries.append("Collection membership changed")
+        if "materials" in changed_keys:
+            summaries.append("Material slots changed")
+        if "node_tree" in changed_keys and datablock_type == "materials":
+            summaries.append("Material nodes changed")
+        if "animation_data" in changed_keys or "nodes_animation_data" in changed_keys:
+            summaries.append("Animation changed")
+
+        if summaries:
+            return ", ".join(summaries[:2])
+        if len(changed_keys) == 1:
+            key = changed_keys[0].replace("_", " ")
+            return f"Updated {key}"
+        return f"Updated {len(changed_keys)} sections"
+
+    def _diff_sources_for_status(self, status):
+        base_status = status.removeprefix("staged_")
+        if status.startswith("staged_"):
+            return ("HEAD", None) if base_status == "deleted" else ("HEAD", "INDEX")
+        return ("INDEX", None) if base_status == "deleted" else ("INDEX", "WORKTREE")
+
+    def _entry_context_for_diff(self, uuid, before_source, after_source, manifests, entries, groups):
+        if not uuid:
+            return None, None, None
+        current_entry = entries.get(uuid)
+        current_group = None
+        if current_entry:
+            current_group = groups.get(current_entry.get(MANIFEST_GROUP_KEY) or uuid)
+
+        before_manifest = manifests.get(before_source, self._empty_manifest())
+        after_manifest = manifests.get(after_source, self._empty_manifest())
+        before_entry = (before_manifest.get(MANIFEST_BLOCKS_KEY) or {}).get(uuid)
+        after_entry = (after_manifest.get(MANIFEST_BLOCKS_KEY) or {}).get(uuid)
+        entry = after_entry or current_entry or before_entry
+        group_id = None
+        group_meta = None
+        if entry:
+            group_id = entry.get(MANIFEST_GROUP_KEY) or uuid
+            group_meta = groups.get(group_id)
+            if group_meta is None and isinstance(after_manifest.get(MANIFEST_GROUPS_KEY), dict):
+                group_meta = after_manifest.get(MANIFEST_GROUPS_KEY, {}).get(group_id)
+            if group_meta is None and isinstance(before_manifest.get(MANIFEST_GROUPS_KEY), dict):
+                group_meta = before_manifest.get(MANIFEST_GROUPS_KEY, {}).get(group_id)
+        return entry, group_id, group_meta or current_group
+
+    def _build_ui_diff_row(self, diff, manifests, entries, groups, name_cache):
+        path = diff.get("path", "")
+        uuid = None
+        if path.startswith(".cozystudio/blocks/") and path.endswith(".json"):
+            try:
+                uuid = Path(path).stem
+            except Exception:
+                uuid = None
+
+        before_source, after_source = self._diff_sources_for_status(diff.get("status", ""))
+        before_block = self._load_json_for_source(path, before_source) if uuid else None
+        after_block = self._load_json_for_source(path, after_source) if uuid and after_source else None
+        entry, group_id, group_meta = self._entry_context_for_diff(
+            uuid,
+            before_source,
+            after_source,
+            manifests,
+            entries,
+            groups,
+        )
+        datablock_type = (entry or {}).get("type")
+        display_name = (
+            name_cache.get(uuid)
+            or (after_block or {}).get("name")
+            or (before_block or {}).get("name")
+            or uuid
+            or path
+        )
+
+        return {
+            **diff,
+            "uuid": uuid,
+            "datablock_type": datablock_type,
+            "entry_type": datablock_type,
+            "group_id": group_id,
+            "group": group_meta,
+            "display_name": (
+                f"{display_name} ({datablock_type})" if datablock_type else display_name
+            ),
+            "summary": self._summarize_block_diff(
+                diff.get("status", ""),
+                datablock_type,
+                before_block,
+                after_block,
+            ),
+        }
+
+    def _build_ui_diff_groups(self, section_diffs, manifests, entries, groups, name_cache):
+        grouped = {}
+        ungrouped = []
+        for diff in section_diffs:
+            row = self._build_ui_diff_row(diff, manifests, entries, groups, name_cache)
+            group_id = row.get("group_id")
+            if row.get("uuid") and group_id:
+                group_meta = row.get("group") or {}
+                group = grouped.setdefault(
+                    group_id,
+                    {
+                        "group_id": group_id,
+                        "label": self._group_label(group_id, group_meta, name_cache),
+                        "group": group_meta,
+                        "diffs": [],
+                    },
+                )
+                group["diffs"].append(row)
+                continue
+            ungrouped.append(row)
+
+        section_groups = []
+        for group_id, group_data in grouped.items():
+            group_meta = group_data.get("group") or {}
+            group_members = group_meta.get("members", [])
+            member_total = len(group_members) if group_members else len(group_data["diffs"])
+            label = group_data["label"]
+            if member_total >= len(group_data["diffs"]):
+                label = f"{label} ({len(group_data['diffs'])}/{member_total})"
+            else:
+                label = f"{label} ({len(group_data['diffs'])})"
+            section_groups.append(
+                {
+                    "group_id": group_id,
+                    "label": label,
+                    "diffs": sorted(
+                        group_data["diffs"], key=lambda item: item.get("path", "")
+                    ),
+                }
+            )
+
+        if ungrouped:
+            section_groups.append(
+                {
+                    "group_id": None,
+                    "label": f"Ungrouped ({len(ungrouped)})",
+                    "diffs": sorted(ungrouped, key=lambda item: item.get("path", "")),
+                }
+            )
+
+        section_groups.sort(key=lambda item: item.get("label", ""))
+        return section_groups
 
     def refresh_ui_state(self):
         ui_state = self._empty_ui_state()
@@ -164,113 +440,27 @@ class StateMixin:
 
         entries = (self.state or {}).get("entries", {})
         groups = (self.state or {}).get("groups", {})
-        name_cache = {}
-        if entries:
-            for _type_name, impl_class in self.bpy_protocol.implementations.items():
-                data_collection = getattr(bpy.data, impl_class.bl_id, None)
-                if not data_collection:
-                    continue
-                for datablock in data_collection:
-                    uuid = getattr(datablock, "cozystudio_uuid", None)
-                    if not uuid or uuid not in entries or uuid in name_cache:
-                        continue
-                    name_cache[uuid] = getattr(datablock, "name", None) or uuid
-
-        for section_name, section_diffs in (
-            ("staged_groups", staged),
-            ("unstaged_groups", unstaged),
-        ):
-            grouped = {}
-            ungrouped = []
-
-            for diff in section_diffs:
-                path = diff.get("path", "")
-                uuid = None
-                if path.startswith(".cozystudio/blocks/") and path.endswith(".json"):
-                    try:
-                        uuid = Path(path).stem
-                    except Exception:
-                        uuid = None
-                if not uuid or uuid not in entries:
-                    entry_type = entries.get(uuid, {}).get("type") if uuid else None
-                    ungrouped.append(
-                        {
-                            **diff,
-                            "uuid": uuid,
-                            "entry_type": entry_type,
-                            "display_name": name_cache.get(uuid) or uuid or path,
-                        }
-                    )
-                    continue
-
-                group_id = entries[uuid].get(MANIFEST_GROUP_KEY) or uuid
-                entry_type = entries[uuid].get("type")
-                if group_id not in grouped:
-                    group_meta = groups.get(group_id) or {}
-                    group_type = group_meta.get("type", "group")
-                    root_uuid = group_meta.get("root", group_id)
-                    root_name = name_cache.get(root_uuid) or root_uuid or "Group"
-                    if group_type == "object":
-                        label = f"Object: {root_name}"
-                    elif group_type == "shared":
-                        label = f"Shared: {root_name}"
-                    elif group_type == "orphan":
-                        label = f"Orphan: {root_name}"
-                    else:
-                        label = f"Group: {root_name}"
-                    grouped[group_id] = {
-                        "group_id": group_id,
-                        "label": label,
-                        "group": group_meta,
-                        "diffs": [],
-                    }
-
-                grouped[group_id]["diffs"].append(
-                    {
-                        **diff,
-                        "uuid": uuid,
-                        "entry_type": entry_type,
-                        "display_name": (
-                            f"{name_cache.get(uuid) or uuid or path} ({entry_type})"
-                            if entry_type
-                            else name_cache.get(uuid) or uuid or path
-                        ),
-                    }
-                )
-
-            section_groups = []
-            for group_id, group_data in grouped.items():
-                group_meta = group_data.get("group") or {}
-                group_members = group_meta.get("members", [])
-                member_total = len(group_members) if group_members else len(group_data["diffs"])
-                label = group_data["label"]
-                if member_total >= len(group_data["diffs"]):
-                    label = f"{label} ({len(group_data['diffs'])}/{member_total})"
-                else:
-                    label = f"{label} ({len(group_data['diffs'])})"
-                section_groups.append(
-                    {
-                        "group_id": group_id,
-                        "label": label,
-                        "diffs": sorted(
-                            group_data["diffs"], key=lambda diff: diff.get("path", "")
-                        ),
-                    }
-                )
-
-            if ungrouped:
-                section_groups.append(
-                    {
-                        "group_id": None,
-                        "label": f"Ungrouped ({len(ungrouped)})",
-                        "diffs": sorted(
-                            ungrouped, key=lambda diff: diff.get("path", "")
-                        ),
-                    }
-                )
-
-            section_groups.sort(key=lambda group: group.get("label", ""))
-            ui_state["changes"][section_name] = section_groups
+        name_cache = self._build_name_cache(entries)
+        manifests = {
+            "WORKTREE": self._manifest_for_source("WORKTREE"),
+            "INDEX": self._manifest_for_source("INDEX"),
+            "HEAD": self._manifest_for_source("HEAD"),
+            None: self._empty_manifest(),
+        }
+        ui_state["changes"]["staged_groups"] = self._build_ui_diff_groups(
+            staged,
+            manifests,
+            entries,
+            groups,
+            name_cache,
+        )
+        ui_state["changes"]["unstaged_groups"] = self._build_ui_diff_groups(
+            unstaged,
+            manifests,
+            entries,
+            groups,
+            name_cache,
+        )
 
         self.ui_state = ui_state
         return ui_state

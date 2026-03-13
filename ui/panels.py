@@ -91,6 +91,8 @@ class MAIN_PT_Panel(bpy.types.Panel):
                                 "cozystudio.unstage_file", text="", icon="REMOVE"
                             )
                             op.file_path = diff["path"]
+                        if diff.get("summary"):
+                            row.label(text=diff["summary"])
                         row.label(text=_status_abbrev(diff["status"]))
 
         if grouped_unstaged:
@@ -143,6 +145,8 @@ class MAIN_PT_Panel(bpy.types.Panel):
                                 "cozystudio.add_file", text="", icon="ADD"
                             )
                             op.file_path = diff["path"]
+                        if diff.get("summary"):
+                            row.label(text=diff["summary"])
                         row.label(text=_status_abbrev(diff["status"]))
 
         layout.separator()

@@ -39,10 +39,10 @@ Core product rules:
 
 ## Phase 4 - Semantic Diff Layer
 
-- [ ] Enrich diff rows with UUID, datablock type, group ID, display name, and summary
-- [ ] Add human-readable summaries for transforms, creation/deletion, collection changes, materials, and animation edits
-- [ ] Add safe generic fallback summaries for unsupported fine-grained diff cases
-- [ ] Keep grouping aligned with backend object/shared/orphan group logic
+- [x] Enrich diff rows with UUID, datablock type, group ID, display name, and summary
+- [x] Add human-readable summaries for transforms, creation/deletion, collection changes, materials, and animation edits
+- [x] Add safe generic fallback summaries for unsupported fine-grained diff cases
+- [x] Keep grouping aligned with backend object/shared/orphan group logic
 
 ## Phase 5 - UI Shell Rewrite
 
