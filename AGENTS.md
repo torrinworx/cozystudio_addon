@@ -10,6 +10,7 @@ It is prescriptive. Use it as the ground rules and architecture memory.
 
 ## PROJECT PHILOSOPHY
 - Datablocks are source of truth; `.blend` binaries are bootstraps only.
+- Snapshot history commits manifest and block data, not `.blend` binaries.
 - Prefer explicit, deterministic serialization over implicit magic.
 - Keep Git-facing behavior predictable and UI-driven.
 - READMEs are condensed, accurate summaries, not substitutes for code.
@@ -37,8 +38,9 @@ If a change violates a higher tier, it is wrong even if it "works."
 - Add-on registration must not assume dependencies are installed.
 - Dependency install happens via `cozystudio.install_deps` and only then auto-loads full module registration.
 - `BpyGit` only initializes once a `.blend` is saved and a repo exists or is created by the user.
-- `.blend` is a committed bootstrap named after the project folder; `.blend1` is ignored.
-- `.cozystudio/manifest.json` + `.cozystudio/blocks/` are the tracked artifacts.
+- `.blend` is a bootstrap shell for init/open/clone/recovery flows; `.blend1` is ignored.
+- `.cozystudio/manifest.json` + `.cozystudio/blocks/` are the committed history artifacts.
+- Ref restores and branch switches must rebuild the working scene from manifest and block files.
 
 ## CODING POLICY (STRICT)
 - No one-off helper functions. Inline unless reused in multiple places.

@@ -9,21 +9,29 @@ from .constants import MANIFEST_BLOCKS_KEY
 
 class CheckoutMixin:
     def checkout(self, commit):
+        self.restore_ref(commit, detach=True)
+
+    def switch_branch(self, branch_name):
+        self.restore_ref(branch_name)
+
+    def restore_ref(self, ref=None, detach=False):
         self.suspend_checks = True
         try:
-            try:
-                if not self.repo.head.is_detached:
+            if ref:
+                if detach:
                     try:
-                        self.last_branch = self.repo.active_branch.name
+                        if not self.repo.head.is_detached:
+                            try:
+                                self.last_branch = self.repo.active_branch.name
+                            except Exception:
+                                self.last_branch = None
+                        self.repo.git.checkout("--detach", ref)
                     except Exception:
-                        self.last_branch = None
-                self.repo.git.checkout("--detach", commit)
-            except Exception:
-                self.repo.git.checkout(commit)
+                        self.repo.git.checkout(ref)
+                else:
+                    self.repo.git.checkout(ref)
 
-            self.manifest = WriteDict(self.manifestpath)
-            self._ensure_manifest_schema()
-
+            self._load_working_manifest()
             self._restore_from_manifest()
 
             integrity = self.validate_manifest_integrity()
@@ -39,6 +47,13 @@ class CheckoutMixin:
             redraw("COZYSTUDIO_PT_log")
         finally:
             self.suspend_checks = False
+
+    def _load_working_manifest(self):
+        if not self.manifestpath.exists():
+            self.manifest = None
+            return
+        self.manifest = WriteDict(self.manifestpath)
+        self._ensure_manifest_schema()
 
     def _restore_from_manifest(self):
         if self.manifest is None or not isinstance(self.manifest, dict):

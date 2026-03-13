@@ -27,10 +27,10 @@ class BootstrapMixin:
     def _bootstrap_path(self):
         return self.path / self._bootstrap_name()
 
-    def _write_bootstrap_file(self):
-        if not self.initiated:
-            return
+    def _ensure_bootstrap_file(self):
         bootstrap_path = self._bootstrap_path()
+        if bootstrap_path.exists():
+            return
         try:
             bpy.ops.wm.save_as_mainfile(filepath=str(bootstrap_path), copy=True)
         except Exception as e:

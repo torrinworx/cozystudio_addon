@@ -64,16 +64,19 @@ class BpyGit(
         self.suspend_checks = False
         self.last_integrity_report = None
         self.last_capture_issues = []
+        self.ui_state = self._empty_ui_state()
 
         self.check_interval = check_interval
 
         if str(self.path) == "" or not self.path.exists():
+            self.refresh_ui_state()
             return
 
         git_dir = self.path / ".git"
         if not git_dir.exists():
             self.repo = None
             self.initiated = False
+            self.refresh_ui_state()
             return
 
         try:
@@ -85,25 +88,28 @@ class BpyGit(
         except (InvalidGitRepositoryError, NoSuchPathError):
             self.repo = None
             self.initiated = False
+            self.refresh_ui_state()
             return
         except Exception as e:
             print(f"[BpyGit] Unexpected error while initializing git: {e}")
             print(traceback.format_exc())
             self.repo = None
             self.initiated = False
+            self.refresh_ui_state()
             return
 
         try:
             if self.manifestpath.exists():
-                self.manifest = WriteDict(self.manifestpath)
-                self._ensure_manifest_schema()
-                self._restore_from_manifest()
                 self.initiated = True
+                self.restore_ref()
+                self._ensure_bootstrap_file()
                 timers.register(self._check)
         except Exception as e:
             print(f"[BpyGit] Error loading manifest: {e}")
             print(traceback.format_exc())
             self.manifest = None
+
+        self.refresh_ui_state()
 
 
 __all__ = [

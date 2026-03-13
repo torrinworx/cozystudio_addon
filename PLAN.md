@@ -24,18 +24,18 @@ Core product rules:
 
 ## Phase 2 - Open / Restore / Switch Pipeline
 
-- [ ] Introduce one backend restore entrypoint for ref restore and working-tree reconstruction
-- [ ] Route branch switching through the same safe restore path as snapshot restore
-- [ ] Limit bootstrap shell creation to init/open/clone/recovery flows
-- [ ] Preserve orphan cleanup and dependency-ordered restore in every reconstruction path
-- [ ] Verify restore and ref switching work from manifest and block files alone
+- [x] Introduce one backend restore entrypoint for ref restore and working-tree reconstruction
+- [x] Route branch switching through the same safe restore path as snapshot restore
+- [x] Limit bootstrap shell creation to init/open/clone/recovery flows
+- [x] Preserve orphan cleanup and dependency-ordered restore in every reconstruction path
+- [x] Verify restore and ref switching work from manifest and block files alone
 
 ## Phase 3 - Consolidated UI State API
 
-- [ ] Add a single UI-facing state payload on `BpyGit`
-- [ ] Include repo state, branch state, past-snapshot state, conflicts, integrity, and change counts
-- [ ] Stop having panels read scattered backend internals directly
-- [ ] Make panel rendering depend on the consolidated state payload
+- [x] Add a single UI-facing state payload on `BpyGit`
+- [x] Include repo state, branch state, past-snapshot state, conflicts, integrity, and change counts
+- [x] Stop having panels read scattered backend internals directly
+- [x] Make panel rendering depend on the consolidated state payload
 
 ## Phase 4 - Semantic Diff Layer
 

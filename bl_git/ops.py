@@ -49,6 +49,7 @@ class OpsMixin:
                 self.manifest[MANIFEST_GROUPS_KEY] = (self.state or {}).get("groups", {})
                 self.manifest[MANIFEST_BOOTSTRAP_KEY] = self._bootstrap_name()
                 self.manifest.write()
+            self._ensure_bootstrap_file()
 
     def stage(self, changes: list[str]):
         changes = self._filter_changes(changes)
@@ -171,6 +172,7 @@ class OpsMixin:
         entries, blocks, groups, issues = self._current_state(interactive=interactive)
         self.last_capture_issues = issues
         if not entries:
+            self.refresh_ui_state()
             return self.check_interval
 
         for uuid, entry in prev_entries.items():
@@ -189,6 +191,7 @@ class OpsMixin:
 
         self.state = {"entries": entries, "blocks": blocks, "groups": groups}
         self._update_diffs()
+        self.refresh_ui_state()
         return self.check_interval
 
     def refresh_all(self):

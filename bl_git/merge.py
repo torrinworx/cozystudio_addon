@@ -45,7 +45,7 @@ class MergeMixin:
             return {"ok": True, "errors": [], "conflicts": {}}
 
         try:
-            self.repo.git.checkout(onto_ref)
+            self.restore_ref(onto_ref)
         except Exception as e:
             return {"ok": False, "errors": [f"Failed to checkout {onto_ref}: {e}"], "conflicts": {}}
 
@@ -113,7 +113,7 @@ class MergeMixin:
             self.manifest.update(merged_manifest)
             self.manifest.write()
 
-            self._restore_from_manifest()
+            self.restore_ref()
             self._update_diffs()
             redraw("COZYSTUDIO_PT_panel")
             redraw("COZYSTUDIO_PT_log")

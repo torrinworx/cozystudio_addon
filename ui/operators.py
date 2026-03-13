@@ -76,6 +76,7 @@ class COZYSTUDIO_OT_ManualRefresh(bpy.types.Operator):
             self.report({"WARNING"}, capture_issues[0]["reason"])
         report = state.git_instance.validate_manifest_integrity()
         state.git_instance.last_integrity_report = report
+        state.git_instance.refresh_ui_state()
         if not report.get("ok") and report.get("errors"):
             self.report({"ERROR"}, report["errors"][0])
         return {"FINISHED"}
@@ -221,7 +222,7 @@ class COZYSTUDIO_OT_CheckoutBranch(bpy.types.Operator):
             return {"CANCELLED"}
 
         try:
-            state.git_instance.repo.git.checkout(self.branch_name)
+            state.git_instance.switch_branch(self.branch_name)
             self.report({"INFO"}, f"Checked out {self.branch_name}")
         except Exception as e:
             self.report({"ERROR"}, f"Checkout failed: {e}")

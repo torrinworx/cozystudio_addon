@@ -25,6 +25,7 @@ class DiffsMixin:
     def _update_diffs(self):
         repo = self.repo
         if not repo:
+            self.refresh_ui_state()
             return
 
         diffs_list = []
@@ -93,3 +94,5 @@ class DiffsMixin:
         if self.diffs != final_diffs:
             self.diffs = final_diffs
             redraw("COZYSTUDIO_PT_panel")
+
+        self.refresh_ui_state()

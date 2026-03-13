@@ -9,6 +9,272 @@ from .json_io import serialize_json_data
 
 
 class StateMixin:
+    def _empty_ui_state(self):
+        return {
+            "repo": {
+                "available": bool(getattr(self, "repo", None)),
+                "initiated": bool(getattr(self, "initiated", False)),
+                "path": str(getattr(self, "path", "") or ""),
+                "has_manifest": isinstance(getattr(self, "manifest", None), dict),
+            },
+            "branch": {
+                "current": None,
+                "detached": False,
+                "head_hash": None,
+                "head_short_hash": None,
+                "head_summary": None,
+                "last_branch": getattr(self, "last_branch", None),
+            },
+            "snapshot": {
+                "viewing_past": False,
+                "return_branch": None,
+            },
+            "conflicts": {
+                "has_conflicts": False,
+                "items": [],
+            },
+            "integrity": {
+                "ok": True,
+                "errors": [],
+                "warnings": [],
+            },
+            "changes": {
+                "total": 0,
+                "staged": 0,
+                "unstaged": 0,
+                "staged_groups": [],
+                "unstaged_groups": [],
+            },
+            "history": {
+                "items": [],
+            },
+            "capture": {
+                "has_issues": False,
+                "issues": [],
+            },
+        }
+
+    def refresh_ui_state(self):
+        ui_state = self._empty_ui_state()
+        ui_state["repo"]["available"] = bool(self.repo)
+        ui_state["repo"]["initiated"] = bool(self.initiated)
+        ui_state["repo"]["path"] = str(self.path)
+        ui_state["repo"]["has_manifest"] = isinstance(self.manifest, dict)
+        ui_state["branch"]["last_branch"] = self.last_branch
+
+        capture_issues = [dict(issue) for issue in (self.last_capture_issues or [])]
+        ui_state["capture"]["issues"] = capture_issues
+        ui_state["capture"]["has_issues"] = bool(capture_issues)
+
+        integrity = self.last_integrity_report
+        if integrity is None and self.manifest is not None and self.initiated:
+            integrity = self.validate_manifest_integrity()
+        if isinstance(integrity, dict):
+            ui_state["integrity"] = {
+                "ok": bool(integrity.get("ok", False)),
+                "errors": list(integrity.get("errors", [])),
+                "warnings": list(integrity.get("warnings", [])),
+            }
+
+        manifest_conflicts = None
+        if isinstance(self.manifest, dict):
+            manifest_conflicts = self.manifest.get("conflicts")
+        if isinstance(manifest_conflicts, dict):
+            ui_state["conflicts"]["items"] = [
+                {"uuid": uuid, "reason": reason}
+                for uuid, reason in sorted(manifest_conflicts.items())
+            ]
+        elif isinstance(manifest_conflicts, list):
+            items = []
+            for item in manifest_conflicts:
+                if isinstance(item, dict):
+                    items.append(dict(item))
+                else:
+                    items.append({"uuid": None, "reason": str(item)})
+            ui_state["conflicts"]["items"] = items
+        elif manifest_conflicts:
+            ui_state["conflicts"]["items"] = [
+                {"uuid": None, "reason": str(manifest_conflicts)}
+            ]
+        ui_state["conflicts"]["has_conflicts"] = bool(ui_state["conflicts"]["items"])
+
+        if self.repo is not None:
+            head_hash = None
+            if self.repo.head.is_valid():
+                try:
+                    head_commit = self.repo.head.commit
+                    head_hash = head_commit.hexsha
+                    ui_state["branch"]["head_hash"] = head_hash
+                    ui_state["branch"]["head_short_hash"] = head_hash[:8]
+                    ui_state["branch"]["head_summary"] = (
+                        head_commit.message.splitlines()[0]
+                        if head_commit.message
+                        else "(no message)"
+                    )
+                except Exception:
+                    head_hash = None
+
+            detached = False
+            try:
+                detached = self.repo.head.is_detached
+            except Exception:
+                detached = False
+            ui_state["branch"]["detached"] = detached
+
+            if detached:
+                ui_state["snapshot"]["viewing_past"] = True
+                return_branch = None
+                if self.last_branch and self.last_branch in self.repo.heads:
+                    return_branch = self.last_branch
+                elif "main" in self.repo.heads:
+                    return_branch = "main"
+                elif "master" in self.repo.heads:
+                    return_branch = "master"
+                elif self.repo.heads:
+                    return_branch = self.repo.heads[0].name
+                ui_state["snapshot"]["return_branch"] = return_branch
+            else:
+                try:
+                    ui_state["branch"]["current"] = self.repo.active_branch.name
+                except Exception:
+                    ui_state["branch"]["current"] = None
+
+            try:
+                commits = list(self.repo.iter_commits(all=True, max_count=10))
+            except Exception:
+                commits = []
+            ui_state["history"]["items"] = [
+                {
+                    "commit_hash": commit.hexsha,
+                    "short_hash": commit.hexsha[:8],
+                    "summary": commit.message.splitlines()[0]
+                    if commit.message
+                    else "(no message)",
+                    "is_head": commit.hexsha == head_hash,
+                }
+                for commit in commits
+            ]
+
+        diffs = list(self.diffs or [])
+        staged = [diff for diff in diffs if diff.get("status", "").startswith("staged")]
+        unstaged = [diff for diff in diffs if not diff.get("status", "").startswith("staged")]
+        ui_state["changes"]["total"] = len(diffs)
+        ui_state["changes"]["staged"] = len(staged)
+        ui_state["changes"]["unstaged"] = len(unstaged)
+
+        entries = (self.state or {}).get("entries", {})
+        groups = (self.state or {}).get("groups", {})
+        name_cache = {}
+        if entries:
+            for _type_name, impl_class in self.bpy_protocol.implementations.items():
+                data_collection = getattr(bpy.data, impl_class.bl_id, None)
+                if not data_collection:
+                    continue
+                for datablock in data_collection:
+                    uuid = getattr(datablock, "cozystudio_uuid", None)
+                    if not uuid or uuid not in entries or uuid in name_cache:
+                        continue
+                    name_cache[uuid] = getattr(datablock, "name", None) or uuid
+
+        for section_name, section_diffs in (
+            ("staged_groups", staged),
+            ("unstaged_groups", unstaged),
+        ):
+            grouped = {}
+            ungrouped = []
+
+            for diff in section_diffs:
+                path = diff.get("path", "")
+                uuid = None
+                if path.startswith(".cozystudio/blocks/") and path.endswith(".json"):
+                    try:
+                        uuid = Path(path).stem
+                    except Exception:
+                        uuid = None
+                if not uuid or uuid not in entries:
+                    entry_type = entries.get(uuid, {}).get("type") if uuid else None
+                    ungrouped.append(
+                        {
+                            **diff,
+                            "uuid": uuid,
+                            "entry_type": entry_type,
+                            "display_name": name_cache.get(uuid) or uuid or path,
+                        }
+                    )
+                    continue
+
+                group_id = entries[uuid].get(MANIFEST_GROUP_KEY) or uuid
+                entry_type = entries[uuid].get("type")
+                if group_id not in grouped:
+                    group_meta = groups.get(group_id) or {}
+                    group_type = group_meta.get("type", "group")
+                    root_uuid = group_meta.get("root", group_id)
+                    root_name = name_cache.get(root_uuid) or root_uuid or "Group"
+                    if group_type == "object":
+                        label = f"Object: {root_name}"
+                    elif group_type == "shared":
+                        label = f"Shared: {root_name}"
+                    elif group_type == "orphan":
+                        label = f"Orphan: {root_name}"
+                    else:
+                        label = f"Group: {root_name}"
+                    grouped[group_id] = {
+                        "group_id": group_id,
+                        "label": label,
+                        "group": group_meta,
+                        "diffs": [],
+                    }
+
+                grouped[group_id]["diffs"].append(
+                    {
+                        **diff,
+                        "uuid": uuid,
+                        "entry_type": entry_type,
+                        "display_name": (
+                            f"{name_cache.get(uuid) or uuid or path} ({entry_type})"
+                            if entry_type
+                            else name_cache.get(uuid) or uuid or path
+                        ),
+                    }
+                )
+
+            section_groups = []
+            for group_id, group_data in grouped.items():
+                group_meta = group_data.get("group") or {}
+                group_members = group_meta.get("members", [])
+                member_total = len(group_members) if group_members else len(group_data["diffs"])
+                label = group_data["label"]
+                if member_total >= len(group_data["diffs"]):
+                    label = f"{label} ({len(group_data['diffs'])}/{member_total})"
+                else:
+                    label = f"{label} ({len(group_data['diffs'])})"
+                section_groups.append(
+                    {
+                        "group_id": group_id,
+                        "label": label,
+                        "diffs": sorted(
+                            group_data["diffs"], key=lambda diff: diff.get("path", "")
+                        ),
+                    }
+                )
+
+            if ungrouped:
+                section_groups.append(
+                    {
+                        "group_id": None,
+                        "label": f"Ungrouped ({len(ungrouped)})",
+                        "diffs": sorted(
+                            ungrouped, key=lambda diff: diff.get("path", "")
+                        ),
+                    }
+                )
+
+            section_groups.sort(key=lambda group: group.get("label", ""))
+            ui_state["changes"][section_name] = section_groups
+
+        self.ui_state = ui_state
+        return ui_state
+
     def _current_state(self, interactive=False):
         entries = {}
         blocks = {}

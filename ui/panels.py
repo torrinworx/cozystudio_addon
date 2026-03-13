@@ -1,7 +1,7 @@
 import bpy
 
 from . import state
-from .helpers import _display_block_label, _group_diffs, _status_abbrev
+from .helpers import _status_abbrev
 
 
 class MAIN_PT_Panel(bpy.types.Panel):
@@ -14,8 +14,10 @@ class MAIN_PT_Panel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+        git_ui = getattr(state.git_instance, "ui_state", None) or {}
+        repo_ui = git_ui.get("repo", {})
 
-        if not state.git_instance or not getattr(state.git_instance, "initiated", False):
+        if not state.git_instance or not repo_ui.get("initiated"):
             layout.label(text="No CozyStudio repo found.")
             layout.operator("cozystudio.init_repo", text="Init Repository")
             return
@@ -26,16 +28,25 @@ class MAIN_PT_Panel(bpy.types.Panel):
         row.operator("cozystudio.manual_refresh", text="Refresh", icon="FILE_REFRESH")
         layout.separator()
 
-        diffs = getattr(state.git_instance, "diffs", None) or []
-        staged = [d for d in diffs if d["status"].startswith("staged")]
-        unstaged = [d for d in diffs if not d["status"].startswith("staged")]
+        integrity_ui = git_ui.get("integrity", {})
+        if integrity_ui.get("errors"):
+            box = layout.box()
+            box.label(text=integrity_ui["errors"][0], icon="ERROR")
 
-        grouped_staged = _group_diffs(state.git_instance, staged)
-        grouped_unstaged = _group_diffs(state.git_instance, unstaged)
+        conflicts_ui = git_ui.get("conflicts", {})
+        if conflicts_ui.get("has_conflicts"):
+            box = layout.box()
+            box.label(text="Unresolved conflicts block snapshots.", icon="ERROR")
+
+        grouped_staged = git_ui.get("changes", {}).get("staged_groups", [])
+        grouped_unstaged = git_ui.get("changes", {}).get("unstaged_groups", [])
 
         if grouped_staged:
             box = layout.box()
-            box.label(text="STAGED CHANGES", icon="CHECKMARK")
+            box.label(
+                text=f"STAGED CHANGES ({git_ui.get('changes', {}).get('staged', 0)})",
+                icon="CHECKMARK",
+            )
             for group in grouped_staged:
                 group_box = box.box()
                 header = group_box.row(align=True)
@@ -65,14 +76,14 @@ class MAIN_PT_Panel(bpy.types.Panel):
                         if uuid:
                             op = row.operator(
                                 "cozystudio.select_block",
-                                text=_display_block_label(diff, group["name_cache"]),
+                                text=diff.get("display_name") or diff.get("path", "Entry"),
                                 icon="FILE",
                                 emboss=False,
                             )
                             op.uuid = uuid
                         else:
                             row.label(
-                                text=_display_block_label(diff, group["name_cache"]),
+                                text=diff.get("display_name") or diff.get("path", "Entry"),
                                 icon="FILE",
                             )
                         if is_ungrouped:
@@ -84,7 +95,10 @@ class MAIN_PT_Panel(bpy.types.Panel):
 
         if grouped_unstaged:
             box = layout.box()
-            box.label(text="CHANGES", icon="GREASEPENCIL")
+            box.label(
+                text=f"CHANGES ({git_ui.get('changes', {}).get('unstaged', 0)})",
+                icon="GREASEPENCIL",
+            )
             for group in grouped_unstaged:
                 group_box = box.box()
                 header = group_box.row(align=True)
@@ -114,14 +128,14 @@ class MAIN_PT_Panel(bpy.types.Panel):
                         if uuid:
                             op = row.operator(
                                 "cozystudio.select_block",
-                                text=_display_block_label(diff, group["name_cache"]),
+                                text=diff.get("display_name") or diff.get("path", "Entry"),
                                 icon="FILE",
                                 emboss=False,
                             )
                             op.uuid = uuid
                         else:
                             row.label(
-                                text=_display_block_label(diff, group["name_cache"]),
+                                text=diff.get("display_name") or diff.get("path", "Entry"),
                                 icon="FILE",
                             )
                         if is_ungrouped:
@@ -145,63 +159,44 @@ class COZYSTUDIO_PT_LogPanel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+        git_ui = getattr(state.git_instance, "ui_state", None) or {}
+        repo_ui = git_ui.get("repo", {})
 
-        if not state.git_instance or not getattr(state.git_instance, "initiated", False):
+        if not state.git_instance or not repo_ui.get("initiated"):
             layout.label(text="No CozyStudio repo found.")
             return
 
-        repo = getattr(state.git_instance, "repo", None)
-        if repo is None:
+        if not repo_ui.get("available"):
             layout.label(text="No repository available.")
             return
 
         wm = context.window_manager
-
-        commits = []
-        try:
-            commits = list(repo.iter_commits(all=True, max_count=10))
-        except Exception:
-            commits = []
+        history_items = git_ui.get("history", {}).get("items", [])
 
         items = wm.cozystudio_commit_items
         items.clear()
-        for commit in commits:
+        for commit in history_items:
             item = items.add()
-            item.commit_hash = commit.hexsha
-            item.short_hash = commit.hexsha[:8]
-            item.summary = commit.message.splitlines()[0] if commit.message else "(no message)"
+            item.commit_hash = commit.get("commit_hash", "")
+            item.short_hash = commit.get("short_hash", "")
+            item.summary = commit.get("summary", "(no message)")
 
-        if repo.head.is_detached:
-            head_hash = None
-            try:
-                head_hash = repo.head.commit.hexsha
-            except Exception:
-                head_hash = None
+        snapshot_ui = git_ui.get("snapshot", {})
+        branch_ui = git_ui.get("branch", {})
+        if snapshot_ui.get("viewing_past") and branch_ui.get("head_short_hash"):
+            row = layout.row(align=True)
+            row.label(text=f"Detached at {branch_ui['head_short_hash']}")
 
-            if head_hash:
-                row = layout.row(align=True)
-                row.label(text=f"Detached at {head_hash[:8]}")
+            branch_name = snapshot_ui.get("return_branch")
+            if branch_name:
+                op = row.operator(
+                    "cozystudio.checkout_branch",
+                    text="Return",
+                    icon="LOOP_BACK",
+                )
+                op.branch_name = branch_name
 
-                preferred = getattr(state.git_instance, "last_branch", None)
-                branch_name = None
-                if preferred and preferred in repo.heads:
-                    branch_name = preferred
-                elif "main" in repo.heads:
-                    branch_name = "main"
-                elif "master" in repo.heads:
-                    branch_name = "master"
-                elif repo.heads:
-                    branch_name = repo.heads[0].name
-
-                if branch_name:
-                    op = row.operator(
-                        "cozystudio.checkout_branch",
-                        text="Return",
-                        icon="LOOP_BACK",
-                    )
-                    op.branch_name = branch_name
-
-        if not commits:
+        if not history_items:
             layout.label(text="No commits found.")
             return
 
