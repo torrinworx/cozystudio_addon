@@ -16,11 +16,11 @@ Core product rules:
 
 ## Phase 1 - History Model Cleanup
 
-- [ ] Remove bootstrap `.blend` writes from normal snapshot commits
-- [ ] Stop staging bootstrap `.blend` files during snapshot commits
-- [ ] Keep `.blend` files excluded from regular change detection and staging
-- [ ] Make manifest and block files the only committed history artifacts by default
-- [ ] Verify snapshot commits work without committed `.blend` binaries
+- [x] Remove bootstrap `.blend` writes from normal snapshot commits
+- [x] Stop staging bootstrap `.blend` files during snapshot commits
+- [x] Keep `.blend` files excluded from regular change detection and staging
+- [x] Make manifest and block files the only committed history artifacts by default
+- [x] Verify snapshot commits work without committed `.blend` binaries
 
 ## Phase 2 - Open / Restore / Switch Pipeline
 

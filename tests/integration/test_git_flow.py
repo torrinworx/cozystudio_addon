@@ -180,3 +180,43 @@ def test_checkout_does_not_dirty_blocks():
     assert mesh_path not in dirty_blocks, (
         f"Unexpected mesh block diff after checkout: {mesh_path}"
     )
+
+
+@pytest.mark.order(8)
+def test_snapshot_commit_ignores_blend_file():
+    ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
+    git_inst = init_git_repo_for_test(ui_mod)
+
+    test_obj = create_test_object(name="CozyNoBlendCommitObject")
+    ensure_tracking_assignments(git_inst)
+
+    uuid = wait_for_uuid(test_obj)
+    assert uuid, "Object UUID was not assigned"
+
+    git_inst._check()
+    group_id = (
+        git_inst.state.get("entries", {}).get(uuid, {}).get("group_id") or uuid
+    )
+
+    blend_name = bpy.path.basename(bpy.data.filepath)
+    git_inst.stage(changes=[blend_name])
+    staged_paths = {
+        path
+        for (path, stage) in git_inst.repo.index.entries.keys()
+        if stage == 0
+    }
+    assert blend_name not in staged_paths, ".blend file should not stage through Cozy"
+
+    result = bpy.ops.cozystudio.add_group("EXEC_DEFAULT", group_id=group_id)
+    assert "FINISHED" in result, f"add_group returned {result}"
+
+    result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Commit Without Blend")
+    assert "FINISHED" in result, f"commit returned {result}"
+
+    commit = git_inst.repo.head.commit
+    committed_paths = {item.path for item in commit.tree.traverse() if item.type == "blob"}
+    assert ".cozystudio/manifest.json" in committed_paths
+    assert f".cozystudio/blocks/{uuid}.json" in committed_paths
+    assert not any(path.endswith(".blend") for path in committed_paths), (
+        f"Snapshot commit should not include bootstrap blend files: {sorted(committed_paths)}"
+    )

@@ -143,8 +143,7 @@ class OpsMixin:
                 self.manifest[MANIFEST_BOOTSTRAP_KEY] = self._bootstrap_name()
                 self.manifest.write()
 
-            self._write_bootstrap_file()
-            self._stage_internal_files()
+            self._stage_manifest_file()
             self._update_diffs()
             self.repo.index.commit(message)
             self._update_diffs()

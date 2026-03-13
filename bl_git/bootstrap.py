@@ -36,7 +36,7 @@ class BootstrapMixin:
         except Exception as e:
             print(f"[BpyGit] Failed to write bootstrap .blend: {e}")
 
-    def _stage_internal_files(self):
+    def _stage_manifest_file(self):
         if not self.repo:
             return
 
@@ -46,11 +46,3 @@ class BootstrapMixin:
                 self.repo.index.add([manifest_rel])
         except Exception as e:
             print(f"[BpyGit] Failed to stage manifest.json: {e}")
-
-        try:
-            bootstrap_path = self._bootstrap_path()
-            if bootstrap_path.exists():
-                bootstrap_rel = os.path.relpath(bootstrap_path, self.path)
-                self.repo.index.add([bootstrap_rel])
-        except Exception as e:
-            print(f"[BpyGit] Failed to stage bootstrap .blend: {e}")
