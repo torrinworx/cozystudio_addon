@@ -46,15 +46,15 @@ Core product rules:
 
 ## Phase 5 - UI Shell Rewrite
 
-- [ ] Replace the current experimental panels with a state-driven shell
-- [ ] Create `Project` panel for setup and project status
-- [ ] Create `Changes` panel for grouped asset/datablock changes
-- [ ] Create `Snapshot` panel as the main commit surface
-- [ ] Create `History` panel for timeline and restore flows
-- [ ] Create `Sync` panel for branch/merge/rebase workflows
-- [ ] Create `Conflicts` panel for resolution workflows
-- [ ] Create `Diagnostics` panel for integrity and system status
-- [ ] Add an `Advanced` mode for raw Git-oriented details
+- [x] Replace the current experimental panels with a state-driven shell
+- [x] Create `Project` panel for setup and project status
+- [x] Create `Changes` panel for grouped asset/datablock changes
+- [x] Create `Snapshot` panel as the main commit surface
+- [x] Create `History` panel for timeline and restore flows
+- [x] Create `Sync` panel for branch/merge/rebase workflows
+- [x] Create `Conflicts` panel for resolution workflows
+- [x] Create `Diagnostics` panel for integrity and system status
+- [x] Add an `Advanced` mode for raw Git-oriented details
 
 ## Phase 6 - Operator Redesign
 

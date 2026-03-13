@@ -43,6 +43,8 @@ class StateMixin:
                 "initiated": bool(getattr(self, "initiated", False)),
                 "path": str(getattr(self, "path", "") or ""),
                 "has_manifest": isinstance(getattr(self, "manifest", None), dict),
+                "tracked_blocks": 0,
+                "tracked_groups": 0,
             },
             "branch": {
                 "current": None,
@@ -55,10 +57,13 @@ class StateMixin:
             "snapshot": {
                 "viewing_past": False,
                 "return_branch": None,
+                "can_commit": False,
+                "blockers": [],
             },
             "conflicts": {
                 "has_conflicts": False,
                 "items": [],
+                "count": 0,
             },
             "integrity": {
                 "ok": True,
@@ -74,10 +79,12 @@ class StateMixin:
             },
             "history": {
                 "items": [],
+                "count": 0,
             },
             "capture": {
                 "has_issues": False,
                 "issues": [],
+                "count": 0,
             },
         }
 
@@ -341,6 +348,7 @@ class StateMixin:
         capture_issues = [dict(issue) for issue in (self.last_capture_issues or [])]
         ui_state["capture"]["issues"] = capture_issues
         ui_state["capture"]["has_issues"] = bool(capture_issues)
+        ui_state["capture"]["count"] = len(capture_issues)
 
         integrity = self.last_integrity_report
         if integrity is None and self.manifest is not None and self.initiated:
@@ -373,6 +381,7 @@ class StateMixin:
                 {"uuid": None, "reason": str(manifest_conflicts)}
             ]
         ui_state["conflicts"]["has_conflicts"] = bool(ui_state["conflicts"]["items"])
+        ui_state["conflicts"]["count"] = len(ui_state["conflicts"]["items"])
 
         if self.repo is not None:
             head_hash = None
@@ -430,6 +439,7 @@ class StateMixin:
                 }
                 for commit in commits
             ]
+            ui_state["history"]["count"] = len(ui_state["history"]["items"])
 
         diffs = list(self.diffs or [])
         staged = [diff for diff in diffs if diff.get("status", "").startswith("staged")]
@@ -440,6 +450,8 @@ class StateMixin:
 
         entries = (self.state or {}).get("entries", {})
         groups = (self.state or {}).get("groups", {})
+        ui_state["repo"]["tracked_blocks"] = len(entries)
+        ui_state["repo"]["tracked_groups"] = len(groups)
         name_cache = self._build_name_cache(entries)
         manifests = {
             "WORKTREE": self._manifest_for_source("WORKTREE"),
@@ -460,6 +472,15 @@ class StateMixin:
             entries,
             groups,
             name_cache,
+        )
+        if ui_state["capture"]["has_issues"]:
+            ui_state["snapshot"]["blockers"].append("Resolve capture issues before saving a snapshot.")
+        if not ui_state["integrity"].get("ok", True):
+            ui_state["snapshot"]["blockers"].append("Fix manifest integrity errors before saving a snapshot.")
+        if ui_state["conflicts"]["has_conflicts"]:
+            ui_state["snapshot"]["blockers"].append("Resolve conflicts before saving a snapshot.")
+        ui_state["snapshot"]["can_commit"] = (
+            ui_state["changes"]["staged"] > 0 and not ui_state["snapshot"]["blockers"]
         )
 
         self.ui_state = ui_state

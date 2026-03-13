@@ -32,7 +32,10 @@ class COZYSTUDIO_UL_CommitList(bpy.types.UIList):
         self, context, layout, data, item, icon, active_data, active_propname, index
     ):
         split = layout.split(factor=0.86, align=True)
-        split.label(text=f"{item.short_hash}  {item.summary}")
+        split.label(
+            text=f"{item.short_hash}  {item.summary}",
+            icon="RADIOBUT_ON" if item.is_head else "BLANK1",
+        )
         op = split.operator(
             "cozystudio.checkout_commit", text="", icon="FILE_REFRESH", emboss=True
         )

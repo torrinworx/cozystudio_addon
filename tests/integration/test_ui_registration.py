@@ -15,7 +15,15 @@ expected_ops = [
     "cozystudio.unstage_file",
     "cozystudio.install_deps",
 ]
-expected_panels = ["COZYSTUDIO_PT_panel", "COZYSTUDIO_PT_log"]
+expected_panels = [
+    "COZYSTUDIO_PT_project",
+    "COZYSTUDIO_PT_panel",
+    "COZYSTUDIO_PT_snapshot",
+    "COZYSTUDIO_PT_log",
+    "COZYSTUDIO_PT_sync",
+    "COZYSTUDIO_PT_conflicts",
+    "COZYSTUDIO_PT_diagnostics",
+]
 
 
 @pytest.mark.order(3)
@@ -33,6 +41,7 @@ def test_all_cozystudio_ui_classes_registered():
 
     missing_panels = [pid for pid in expected_panels if not hasattr(bpy.types, pid)]
     assert not missing_panels, f"Missing panels: {missing_panels}"
+    assert hasattr(bpy.types.WindowManager, "cozystudio_advanced_mode")
 
     for pid in expected_panels:
         panel_cls = getattr(bpy.types, pid)
