@@ -17,7 +17,7 @@ def _draw_repo_missing(layout):
         layout.label(text="Save this .blend file to start a Cozy project.", icon="INFO")
         return
     layout.label(text="No CozyStudio repo found for this file.", icon="INFO")
-    layout.operator("cozystudio.init_repo", text="Init Repository", icon="ADD")
+    layout.operator("cozystudio.setup_project", text="Setup Project", icon="ADD")
 
 
 def _draw_grouped_changes(layout, groups, staged):
@@ -198,7 +198,7 @@ class COZYSTUDIO_PT_SnapshotPanel(bpy.types.Panel):
 
         row = layout.row()
         row.enabled = snapshot_ui.get("can_commit")
-        row.operator("cozystudio.commit", text="Create Snapshot", icon="CHECKMARK")
+        row.operator("cozystudio.create_snapshot", text="Create Snapshot", icon="CHECKMARK")
 
 
 class COZYSTUDIO_PT_LogPanel(bpy.types.Panel):
@@ -239,7 +239,7 @@ class COZYSTUDIO_PT_LogPanel(bpy.types.Panel):
             row.label(text=f"Detached at {branch_ui['head_short_hash']}", icon="TIME")
             branch_name = snapshot_ui.get("return_branch")
             if branch_name:
-                op = row.operator("cozystudio.checkout_branch", text="Return", icon="LOOP_BACK")
+                op = row.operator("cozystudio.switch_branch", text="Return", icon="LOOP_BACK")
                 op.branch_name = branch_name
 
         if not history_items:
@@ -285,10 +285,12 @@ class COZYSTUDIO_PT_SyncPanel(bpy.types.Panel):
         if snapshot_ui.get("return_branch"):
             row = layout.row(align=True)
             row.label(text=f"Return branch: {snapshot_ui['return_branch']}")
-            op = row.operator("cozystudio.checkout_branch", text="Return", icon="LOOP_BACK")
+            op = row.operator("cozystudio.switch_branch", text="Return", icon="LOOP_BACK")
             op.branch_name = snapshot_ui["return_branch"]
 
-        layout.label(text="Merge and rebase flows land in the next operator phase.", icon="INFO")
+        row = layout.row(align=True)
+        row.operator("cozystudio.bring_in_changes", text="Bring In Changes", icon="IMPORT")
+        row.operator("cozystudio.replay_my_work", text="Replay My Work", icon="TRIA_RIGHT_BAR")
         if context.window_manager.cozystudio_advanced_mode:
             advanced = layout.box()
             advanced.label(text="Advanced Branch State", icon="PREFERENCES")
@@ -318,11 +320,16 @@ class COZYSTUDIO_PT_ConflictsPanel(bpy.types.Panel):
             return
 
         layout.label(text=f"{conflicts_ui.get('count', 0)} unresolved conflicts", icon="ERROR")
+        clear_all = layout.row()
+        clear_all.operator("cozystudio.resolve_conflict", text="Mark All Resolved", icon="CHECKMARK")
         for item in conflicts_ui.get("items", []):
             box = layout.box()
             if context.window_manager.cozystudio_advanced_mode and item.get("uuid"):
                 box.label(text=item["uuid"], icon="FILE")
             box.label(text=item.get("reason") or "Conflict", icon="ERROR")
+            if item.get("uuid"):
+                op = box.operator("cozystudio.resolve_conflict", text="Mark Resolved", icon="CHECKMARK")
+                op.conflict_uuid = item["uuid"]
 
 
 class COZYSTUDIO_PT_DiagnosticsPanel(bpy.types.Panel):
@@ -345,7 +352,7 @@ class COZYSTUDIO_PT_DiagnosticsPanel(bpy.types.Panel):
 
         row = layout.row(align=True)
         row.label(text="System status", icon="INFO")
-        row.operator("cozystudio.manual_refresh", text="Refresh", icon="FILE_REFRESH")
+        row.operator("cozystudio.run_diagnostics", text="Refresh", icon="FILE_REFRESH")
 
         integrity_box = layout.box()
         integrity_box.label(

@@ -166,3 +166,55 @@ def test_rebase_replays_commits():
     assert matrix and abs(matrix[0][3] - 3.0) < 1e-4
 
     git_inst.repo.git.branch("-D", "feature_rebase")
+
+
+@pytest.mark.order(23)
+def test_product_language_sync_and_conflict_operators():
+    ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
+    git_inst = init_git_repo_for_test(ui_mod)
+    clear_manifest_conflicts(git_inst)
+
+    base_branch = get_repo_branch_name(git_inst.repo)
+    assert base_branch
+
+    obj = create_test_object(name="CozyOperatorMergeObject")
+    obj.location.x = 0.0
+    ensure_tracking_assignments(git_inst)
+    uuid = wait_for_uuid(obj)
+    assert uuid
+    git_inst._check()
+    assert wait_for_block_file(git_inst, uuid)
+
+    _stage_group(git_inst, uuid)
+    result = bpy.ops.cozystudio.create_snapshot("EXEC_DEFAULT", message="Base state")
+    assert "FINISHED" in result
+    base_commit = git_inst.repo.head.commit.hexsha
+
+    git_inst.repo.git.checkout("-b", "feature_operator_merge")
+    obj.location.x = 2.0
+    git_inst._check()
+    _stage_group(git_inst, uuid)
+    result = bpy.ops.cozystudio.create_snapshot("EXEC_DEFAULT", message="Feature state")
+    assert "FINISHED" in result
+
+    git_inst.repo.git.checkout(base_branch)
+    git_inst.checkout(base_commit)
+    git_inst.refresh_all()
+
+    result = bpy.ops.cozystudio.bring_in_changes(
+        "EXEC_DEFAULT", ref_name="feature_operator_merge", strategy="manual"
+    )
+    assert "FINISHED" in result
+    data = git_inst._read(uuid)
+    matrix = data.get("transforms", {}).get("matrix_basis", [])
+    assert matrix and abs(matrix[0][3] - 2.0) < 1e-4
+
+    git_inst.manifest["conflicts"] = {uuid: "Synthetic operator conflict"}
+    git_inst.manifest.write()
+    result = bpy.ops.cozystudio.resolve_conflict(
+        "EXEC_DEFAULT", conflict_uuid=uuid
+    )
+    assert "FINISHED" in result
+    assert not (git_inst.manifest or {}).get("conflicts")
+
+    git_inst.repo.git.branch("-D", "feature_operator_merge")

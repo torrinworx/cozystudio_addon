@@ -375,3 +375,63 @@ def test_ui_state_payload_tracks_repo_branch_conflicts_and_counts():
     clear_manifest_conflicts(git_inst)
     git_inst.last_integrity_report = git_inst.validate_manifest_integrity()
     git_inst.switch_branch(base_branch)
+
+
+@pytest.mark.order(14)
+def test_product_language_snapshot_restore_and_branch_switch_operators():
+    ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
+    git_inst = init_git_repo_for_test(ui_mod)
+    base_branch = get_repo_branch_name(git_inst.repo)
+    assert base_branch
+
+    test_obj = create_test_object(name="CozyProductOpsObject")
+    test_obj.location.x = 1.0
+    ensure_tracking_assignments(git_inst)
+
+    uuid = wait_for_uuid(test_obj)
+    assert uuid
+
+    git_inst._check()
+    group_id = (
+        git_inst.state.get("entries", {}).get(uuid, {}).get("group_id") or uuid
+    )
+    result = bpy.ops.cozystudio.add_group("EXEC_DEFAULT", group_id=group_id)
+    assert "FINISHED" in result
+    result = bpy.ops.cozystudio.create_snapshot(
+        "EXEC_DEFAULT", message="Product Language Base"
+    )
+    assert "FINISHED" in result
+    commit1 = git_inst.repo.head.commit.hexsha
+
+    test_obj.location.x = 5.0
+    git_inst._check()
+    result = bpy.ops.cozystudio.add_group("EXEC_DEFAULT", group_id=group_id)
+    assert "FINISHED" in result
+    result = bpy.ops.cozystudio.create_snapshot(
+        "EXEC_DEFAULT", message="Product Language Updated"
+    )
+    assert "FINISHED" in result
+
+    result = bpy.ops.cozystudio.restore_snapshot(
+        "EXEC_DEFAULT", commit_hash=commit1
+    )
+    assert "FINISHED" in result
+    assert git_inst.repo.head.is_detached
+
+    restored_obj = _find_object_by_uuid(uuid)
+    assert restored_obj is not None
+    assert abs(restored_obj.location.x - 1.0) < 1e-4
+
+    result = bpy.ops.cozystudio.switch_branch(
+        "EXEC_DEFAULT", branch_name=base_branch
+    )
+    assert "FINISHED" in result
+    assert not git_inst.repo.head.is_detached
+    assert git_inst.repo.active_branch.name == base_branch
+
+    restored_obj = _find_object_by_uuid(uuid)
+    assert restored_obj is not None
+    assert abs(restored_obj.location.x - 5.0) < 1e-4
+
+    result = bpy.ops.cozystudio.run_diagnostics("EXEC_DEFAULT")
+    assert "FINISHED" in result

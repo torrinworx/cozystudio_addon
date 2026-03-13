@@ -6,6 +6,14 @@ import pytest
 ADDON_MODULE = "cozystudio_addon"
 
 expected_ops = [
+    "cozystudio.setup_project",
+    "cozystudio.create_snapshot",
+    "cozystudio.restore_snapshot",
+    "cozystudio.switch_branch",
+    "cozystudio.bring_in_changes",
+    "cozystudio.replay_my_work",
+    "cozystudio.resolve_conflict",
+    "cozystudio.run_diagnostics",
     "cozystudio.init_repo",
     "cozystudio.commit",
     "cozystudio.checkout_commit",

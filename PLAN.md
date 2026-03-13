@@ -58,10 +58,10 @@ Core product rules:
 
 ## Phase 6 - Operator Redesign
 
-- [ ] Replace or wrap placeholder operators with product-language operators
-- [ ] Add project setup, snapshot, restore, branch switch, merge, rebase, conflict resolve, and diagnostics operators
-- [ ] Remove direct unsafe branch checkout behavior from the UI layer
-- [ ] Keep temporary compatibility shims for legacy operator names while migrating tests
+- [x] Replace or wrap placeholder operators with product-language operators
+- [x] Add project setup, snapshot, restore, branch switch, merge, rebase, conflict resolve, and diagnostics operators
+- [x] Remove direct unsafe branch checkout behavior from the UI layer
+- [x] Keep temporary compatibility shims for legacy operator names while migrating tests
 
 ## Phase 7 - Snapshot Flow Hardening
 

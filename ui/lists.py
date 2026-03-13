@@ -37,6 +37,6 @@ class COZYSTUDIO_UL_CommitList(bpy.types.UIList):
             icon="RADIOBUT_ON" if item.is_head else "BLANK1",
         )
         op = split.operator(
-            "cozystudio.checkout_commit", text="", icon="FILE_REFRESH", emboss=True
+            "cozystudio.restore_snapshot", text="", icon="FILE_REFRESH", emboss=True
         )
         op.commit_hash = item.commit_hash
