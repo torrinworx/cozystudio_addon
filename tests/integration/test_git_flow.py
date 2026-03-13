@@ -185,7 +185,7 @@ def test_checkout_does_not_dirty_blocks():
 
 
 @pytest.mark.order(8)
-def test_snapshot_commit_ignores_blend_file():
+def test_commit_ignores_blend_file():
     ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
     git_inst = init_git_repo_for_test(ui_mod)
 
@@ -355,8 +355,8 @@ def test_ui_state_payload_tracks_repo_branch_conflicts_and_counts():
 
     ui_state = git_inst.ui_state
     assert ui_state["branch"]["detached"]
-    assert ui_state["snapshot"]["viewing_past"]
-    assert ui_state["snapshot"]["return_branch"] == base_branch
+    assert ui_state["commit"]["viewing_past"]
+    assert ui_state["commit"]["return_branch"] == base_branch
     assert ui_state["integrity"]["ok"]
     assert ui_state["history"]["items"]
     assert ui_state["history"]["items"][0]["commit_hash"]
@@ -378,7 +378,7 @@ def test_ui_state_payload_tracks_repo_branch_conflicts_and_counts():
 
 
 @pytest.mark.order(14)
-def test_product_language_snapshot_restore_and_branch_switch_operators():
+def test_git_named_commit_checkout_and_branch_checkout_operators():
     ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
     git_inst = init_git_repo_for_test(ui_mod)
     base_branch = get_repo_branch_name(git_inst.repo)
@@ -397,9 +397,7 @@ def test_product_language_snapshot_restore_and_branch_switch_operators():
     )
     result = bpy.ops.cozystudio.add_group("EXEC_DEFAULT", group_id=group_id)
     assert "FINISHED" in result
-    result = bpy.ops.cozystudio.create_snapshot(
-        "EXEC_DEFAULT", message="Product Language Base"
-    )
+    result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Git Language Base")
     assert "FINISHED" in result
     commit1 = git_inst.repo.head.commit.hexsha
 
@@ -407,14 +405,10 @@ def test_product_language_snapshot_restore_and_branch_switch_operators():
     git_inst._check()
     result = bpy.ops.cozystudio.add_group("EXEC_DEFAULT", group_id=group_id)
     assert "FINISHED" in result
-    result = bpy.ops.cozystudio.create_snapshot(
-        "EXEC_DEFAULT", message="Product Language Updated"
-    )
+    result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Git Language Updated")
     assert "FINISHED" in result
 
-    result = bpy.ops.cozystudio.restore_snapshot(
-        "EXEC_DEFAULT", commit_hash=commit1
-    )
+    result = bpy.ops.cozystudio.checkout_commit("EXEC_DEFAULT", commit_hash=commit1)
     assert "FINISHED" in result
     assert git_inst.repo.head.is_detached
 
@@ -422,9 +416,7 @@ def test_product_language_snapshot_restore_and_branch_switch_operators():
     assert restored_obj is not None
     assert abs(restored_obj.location.x - 1.0) < 1e-4
 
-    result = bpy.ops.cozystudio.switch_branch(
-        "EXEC_DEFAULT", branch_name=base_branch
-    )
+    result = bpy.ops.cozystudio.checkout_branch("EXEC_DEFAULT", branch_name=base_branch)
     assert "FINISHED" in result
     assert not git_inst.repo.head.is_detached
     assert git_inst.repo.active_branch.name == base_branch
@@ -438,11 +430,11 @@ def test_product_language_snapshot_restore_and_branch_switch_operators():
 
 
 @pytest.mark.order(15)
-def test_snapshot_preflight_returns_structured_blockers():
+def test_commit_preflight_returns_structured_blockers():
     ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
     git_inst = init_git_repo_for_test(ui_mod)
 
-    result = git_inst.snapshot_preflight()
+    result = git_inst.commit_preflight()
 
     assert "ok" in result
     assert "can_commit" in result

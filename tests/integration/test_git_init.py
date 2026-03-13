@@ -1,5 +1,6 @@
 import importlib
 import json
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -43,8 +44,8 @@ def test_new_file_save_init_commit_flow():
         assert git_inst is not None
         assert git_inst.path == project_dir
 
-        result = bpy.ops.cozystudio.init_repo()
-        assert "FINISHED" in result, f"init_repo returned {result}"
+        result = bpy.ops.cozystudio.setup_project()
+        assert "FINISHED" in result, f"setup_project returned {result}"
 
         git_inst._check()
         manifest_path = project_dir / ".cozystudio" / "manifest.json"
@@ -69,3 +70,41 @@ def test_new_file_save_init_commit_flow():
         result = git_inst.commit(message="Initial Commit")
         assert result.get("ok"), f"commit returned {result}"
         assert git_inst.repo.head.is_valid()
+
+
+@pytest.mark.order(100)
+def test_setup_project_prefers_local_repo_over_parent_repo():
+    ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        parent_dir = Path(tmp_dir)
+        subprocess.run(["git", "init"], cwd=parent_dir, check=True, capture_output=True)
+
+        project_dir = parent_dir / "nested_project"
+        project_dir.mkdir()
+        blend_path = project_dir / "NestedProject.blend"
+
+        bpy.ops.wm.read_factory_settings(use_empty=False)
+        bpy.ops.wm.save_as_mainfile(filepath=str(blend_path))
+        bpy.ops.wm.open_mainfile(filepath=str(blend_path))
+
+        start = time.time()
+        while time.time() - start < 3.0:
+            ui_mod.check_and_init_git()
+            git_inst = getattr(ui_mod, "git_instance", None)
+            if git_inst is not None and getattr(git_inst, "path", None) == project_dir:
+                break
+            time.sleep(0.1)
+
+        git_inst = getattr(ui_mod, "git_instance", None)
+        assert git_inst is not None
+        assert git_inst.path == project_dir
+        assert git_inst.repo is None
+
+        result = bpy.ops.cozystudio.setup_project()
+        assert "FINISHED" in result, f"setup_project returned {result}"
+
+        assert (project_dir / ".git").exists()
+        assert git_inst.repo is not None
+        assert Path(git_inst.repo.working_tree_dir).resolve() == project_dir
+        assert Path(parent_dir / ".git").resolve() != Path(git_inst.repo.working_tree_dir).resolve()

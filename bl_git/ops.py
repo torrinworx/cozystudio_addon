@@ -17,7 +17,7 @@ from .constants import (
 
 
 class OpsMixin:
-    def snapshot_preflight(self):
+    def commit_preflight(self):
         result = {
             "ok": False,
             "errors": [],
@@ -54,6 +54,9 @@ class OpsMixin:
             result["conflicts"] = conflicts
             result["blockers"].append("Unresolved conflicts present in manifest.")
 
+        if self.repo.head.is_detached:
+            result["blockers"].append("Checkout a branch before committing.")
+
         entries = (self.state or {}).get("entries", {})
         groups = (self.state or {}).get("groups", {})
         staged_paths = {
@@ -70,7 +73,7 @@ class OpsMixin:
             result["staged_count"] = len(staged_paths)
 
         if result["staged_count"] == 0:
-            result["blockers"].append("No staged changes to snapshot.")
+            result["blockers"].append("No staged changes to commit.")
 
         result["can_commit"] = not result["blockers"]
         result["ok"] = result["can_commit"]
@@ -161,7 +164,7 @@ class OpsMixin:
         if self.manifest is None or not self.repo:
             return {"ok": False, "errors": ["Repository is not initialized."], "blockers": []}
         try:
-            preflight = self.snapshot_preflight()
+            preflight = self.commit_preflight()
             if not preflight.get("ok"):
                 print("[BpyGit] Commit blocked by preflight:")
                 for blocker in preflight.get("blockers", []):
@@ -189,7 +192,7 @@ class OpsMixin:
             self._update_diffs()
             self.repo.index.commit(message)
             self._update_diffs()
-            redraw("COZYSTUDIO_PT_log")
+            redraw("COZYSTUDIO_PT_history")
             return {
                 "ok": True,
                 "errors": [],
@@ -243,8 +246,8 @@ class OpsMixin:
             return
         self._check(interactive=True)
         self._update_diffs()
-        redraw("COZYSTUDIO_PT_panel")
-        redraw("COZYSTUDIO_PT_log")
+        redraw("COZYSTUDIO_PT_changes")
+        redraw("COZYSTUDIO_PT_history")
 
     @staticmethod
     def _group_stage_paths(staged_paths, entries, groups):

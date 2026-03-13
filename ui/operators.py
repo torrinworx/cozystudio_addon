@@ -1,4 +1,5 @@
 import traceback
+from pathlib import Path
 
 import bpy
 
@@ -26,6 +27,12 @@ class _CozyOperatorMixin:
         state.git_instance.refresh_ui_state()
         return report
 
+    def _sync_preflight(self):
+        dirty_paths = state.git_instance._dirty_paths()
+        if dirty_paths and not state.git_instance._is_merge_safe_dirty(dirty_paths):
+            return "Working tree has non-Cozy changes. Commit or stash them first."
+        return None
+
 
 class COZYSTUDIO_OT_SetupProject(_CozyOperatorMixin, bpy.types.Operator):
     bl_idname = "cozystudio.setup_project"
@@ -36,6 +43,19 @@ class COZYSTUDIO_OT_SetupProject(_CozyOperatorMixin, bpy.types.Operator):
         if not bpy.data.filepath:
             self.report({"ERROR"}, "Save this .blend file before setting up CozyStudio")
             return {"CANCELLED"}
+        current_path = Path(bpy.path.abspath("//")).resolve()
+        local_git_dir = current_path / ".git"
+        if state.git_instance is not None:
+            try:
+                working_tree_dir = getattr(getattr(state.git_instance, "repo", None), "working_tree_dir", None)
+                if getattr(state.git_instance, "path", None) != current_path:
+                    state.git_instance = None
+                elif working_tree_dir and Path(working_tree_dir).resolve() != current_path:
+                    state.git_instance = None
+                elif not local_git_dir.exists() and getattr(state.git_instance, "repo", None) is not None:
+                    state.git_instance = None
+            except Exception:
+                state.git_instance = None
         if not state.git_instance:
             state.check_and_init_git()
         if not state.git_instance:
@@ -47,26 +67,14 @@ class COZYSTUDIO_OT_SetupProject(_CozyOperatorMixin, bpy.types.Operator):
         return {"FINISHED"}
 
 
-class INIT_OT_PrintOperator(_CozyOperatorMixin, bpy.types.Operator):
-    bl_idname = "cozystudio.init_repo"
-    bl_label = "Init"
-    bl_description = "Initialize CozyStudio Git repository for this project"
-
-    def execute(self, context):
-        result = bpy.ops.cozystudio.setup_project("EXEC_DEFAULT")
-        if "FINISHED" in result:
-            return {"FINISHED"}
-        return {"CANCELLED"}
-
-
-class COZYSTUDIO_OT_CreateSnapshot(_CozyOperatorMixin, bpy.types.Operator):
-    bl_idname = "cozystudio.create_snapshot"
-    bl_label = "Create Snapshot"
-    bl_description = "Create a CozyStudio snapshot from staged datablock changes"
+class COZYSTUDIO_OT_Commit(_CozyOperatorMixin, bpy.types.Operator):
+    bl_idname = "cozystudio.commit"
+    bl_label = "Commit"
+    bl_description = "Commit staged CozyStudio changes"
 
     message: bpy.props.StringProperty(
-        name="Snapshot Message",
-        description="Message for this snapshot",
+        name="Commit Message",
+        description="Message for this commit",
         default="",
     )
 
@@ -86,7 +94,7 @@ class COZYSTUDIO_OT_CreateSnapshot(_CozyOperatorMixin, bpy.types.Operator):
         if not message:
             message = (context.window_manager.cozystudio_commit_message or "").strip()
         if not message:
-            self.report({"WARNING"}, "Snapshot message cannot be empty")
+            self.report({"WARNING"}, "Commit message cannot be empty")
             return {"CANCELLED"}
 
         result = state.git_instance.commit(message=message)
@@ -98,40 +106,13 @@ class COZYSTUDIO_OT_CreateSnapshot(_CozyOperatorMixin, bpy.types.Operator):
             elif errors:
                 self.report({"ERROR"}, errors[0])
             else:
-                self.report({"ERROR"}, "Snapshot failed")
+                self.report({"ERROR"}, "Commit failed")
             return {"CANCELLED"}
 
         if hasattr(context.window_manager, "cozystudio_commit_message"):
             context.window_manager.cozystudio_commit_message = ""
-        self.report({"INFO"}, f"Snapshot created: {message}")
+        self.report({"INFO"}, f"Committed: {message}")
         return {"FINISHED"}
-
-
-class COMMMIT_OT_PrintOperator(_CozyOperatorMixin, bpy.types.Operator):
-    bl_idname = "cozystudio.commit"
-    bl_label = "Commit"
-    bl_description = "Commit staged CozyStudio changes"
-
-    message: bpy.props.StringProperty(
-        name="Commit Message",
-        description="Message for this commit",
-        default="",
-    )
-
-    def invoke(self, context, event):
-        return self.execute(context)
-
-    def draw(self, context):
-        self.layout.prop(self, "message")
-
-    def execute(self, context):
-        result = bpy.ops.cozystudio.create_snapshot(
-            "EXEC_DEFAULT",
-            message=self.message,
-        )
-        if "FINISHED" in result:
-            return {"FINISHED"}
-        return {"CANCELLED"}
 
 
 class COZYSTUDIO_OT_RunDiagnostics(_CozyOperatorMixin, bpy.types.Operator):
@@ -238,6 +219,63 @@ class COZYSTUDIO_OT_UnstageGroup(_CozyOperatorMixin, bpy.types.Operator):
         return {"FINISHED"}
 
 
+class COZYSTUDIO_OT_RevertChange(_CozyOperatorMixin, bpy.types.Operator):
+    bl_idname = "cozystudio.revert_change"
+    bl_label = "Revert Change"
+    bl_description = "Revert a staged or unstaged change"
+
+    file_path: bpy.props.StringProperty()
+    status: bpy.props.StringProperty()
+
+    def execute(self, context):
+        error = self._require_git()
+        if error:
+            self.report({"ERROR"}, error)
+            return {"CANCELLED"}
+        if not self.file_path:
+            return {"CANCELLED"}
+
+        repo = state.git_instance.repo
+        if repo is None:
+            return {"CANCELLED"}
+
+        status = self.status or ""
+        is_staged = status.startswith("staged_")
+        is_added = status.endswith("added") or status.endswith("untracked")
+        file_abs = Path(state.git_instance.path, self.file_path)
+
+        try:
+            if is_staged:
+                repo.git.restore("--staged", self.file_path)
+            if is_added and file_abs.exists():
+                file_abs.unlink()
+            else:
+                repo.git.restore(self.file_path)
+        except Exception as e:
+            self.report({"ERROR"}, f"Revert failed: {e}")
+            traceback.print_exc()
+            return {"CANCELLED"}
+
+        if self.file_path.startswith(".cozystudio/blocks/") and self.file_path.endswith(
+            ".json"
+        ):
+            uuid = Path(self.file_path).stem
+            if file_abs.exists():
+                try:
+                    data = state.git_instance._read(uuid)
+                    if data.get("uuid") is None:
+                        data["uuid"] = uuid
+                    state.git_instance.deserialize(data)
+                except Exception as e:
+                    self.report({"ERROR"}, f"Failed to restore datablock: {e}")
+                    traceback.print_exc()
+                    return {"CANCELLED"}
+
+        state.git_instance._update_diffs()
+        state.git_instance.refresh_ui_state()
+        return {"FINISHED"}
+
+
 class COZYSTUDIO_OT_ToggleGroupExpanded(bpy.types.Operator):
     bl_idname = "cozystudio.toggle_group_expanded"
     bl_label = "Toggle group"
@@ -253,14 +291,14 @@ class COZYSTUDIO_OT_ToggleGroupExpanded(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class COZYSTUDIO_OT_RestoreSnapshot(_CozyOperatorMixin, bpy.types.Operator):
-    bl_idname = "cozystudio.restore_snapshot"
-    bl_label = "Restore Snapshot"
-    bl_description = "Restore the scene from a previous CozyStudio snapshot"
+class COZYSTUDIO_OT_CheckoutCommit(_CozyOperatorMixin, bpy.types.Operator):
+    bl_idname = "cozystudio.checkout_commit"
+    bl_label = "Checkout Commit"
+    bl_description = "Checkout a commit using CozyStudio reconstruction"
 
     commit_hash: bpy.props.StringProperty(
-        name="Snapshot",
-        description="Commit hash to restore",
+        name="Commit Hash",
+        description="Commit hash to checkout",
         default="",
     )
 
@@ -270,43 +308,22 @@ class COZYSTUDIO_OT_RestoreSnapshot(_CozyOperatorMixin, bpy.types.Operator):
             self.report({"ERROR"}, error)
             return {"CANCELLED"}
         if not self.commit_hash.strip():
-            self.report({"WARNING"}, "Please enter a snapshot hash")
+            self.report({"WARNING"}, "Please enter a commit hash")
             return {"CANCELLED"}
         try:
             state.git_instance.checkout(self.commit_hash)
-            self.report({"INFO"}, f"Restored snapshot {self.commit_hash[:8]}")
+            self.report({"INFO"}, f"Checked out commit {self.commit_hash[:8]}")
             return {"FINISHED"}
         except Exception as e:
-            self.report({"ERROR"}, f"Restore failed: {e}")
+            self.report({"ERROR"}, f"Checkout failed: {e}")
             traceback.print_exc()
             return {"CANCELLED"}
 
 
-class COZYSTUDIO_OT_CheckoutCommit(_CozyOperatorMixin, bpy.types.Operator):
-    bl_idname = "cozystudio.checkout_commit"
-    bl_label = "Checkout Commit"
-    bl_description = "Checkout a specific commit hash"
-
-    commit_hash: bpy.props.StringProperty(
-        name="Commit Hash",
-        description="Enter git commit hash to checkout",
-        default="",
-    )
-
-    def execute(self, context):
-        result = bpy.ops.cozystudio.restore_snapshot(
-            "EXEC_DEFAULT",
-            commit_hash=self.commit_hash,
-        )
-        if "FINISHED" in result:
-            return {"FINISHED"}
-        return {"CANCELLED"}
-
-
-class COZYSTUDIO_OT_SwitchBranch(_CozyOperatorMixin, bpy.types.Operator):
-    bl_idname = "cozystudio.switch_branch"
-    bl_label = "Switch Branch"
-    bl_description = "Switch to another branch using CozyStudio restore safeguards"
+class COZYSTUDIO_OT_CheckoutBranch(_CozyOperatorMixin, bpy.types.Operator):
+    bl_idname = "cozystudio.checkout_branch"
+    bl_label = "Checkout Branch"
+    bl_description = "Checkout a branch using CozyStudio reconstruction"
 
     branch_name: bpy.props.StringProperty(
         name="Branch",
@@ -319,44 +336,27 @@ class COZYSTUDIO_OT_SwitchBranch(_CozyOperatorMixin, bpy.types.Operator):
         if error:
             self.report({"ERROR"}, error)
             return {"CANCELLED"}
+        preflight = self._sync_preflight()
+        if preflight:
+            self.report({"ERROR"}, preflight)
+            return {"CANCELLED"}
         if not self.branch_name.strip():
             self.report({"WARNING"}, "Please enter a branch name")
             return {"CANCELLED"}
         try:
             state.git_instance.switch_branch(self.branch_name)
-            self.report({"INFO"}, f"Switched to {self.branch_name}")
+            self.report({"INFO"}, f"Checked out branch {self.branch_name}")
             return {"FINISHED"}
         except Exception as e:
-            self.report({"ERROR"}, f"Branch switch failed: {e}")
+            self.report({"ERROR"}, f"Branch checkout failed: {e}")
             traceback.print_exc()
             return {"CANCELLED"}
 
 
-class COZYSTUDIO_OT_CheckoutBranch(_CozyOperatorMixin, bpy.types.Operator):
-    bl_idname = "cozystudio.checkout_branch"
-    bl_label = "Checkout Branch"
-    bl_description = "Checkout a branch"
-
-    branch_name: bpy.props.StringProperty(
-        name="Branch",
-        description="Branch name to checkout",
-        default="",
-    )
-
-    def execute(self, context):
-        result = bpy.ops.cozystudio.switch_branch(
-            "EXEC_DEFAULT",
-            branch_name=self.branch_name,
-        )
-        if "FINISHED" in result:
-            return {"FINISHED"}
-        return {"CANCELLED"}
-
-
-class COZYSTUDIO_OT_BringInChanges(_CozyOperatorMixin, bpy.types.Operator):
-    bl_idname = "cozystudio.bring_in_changes"
-    bl_label = "Bring In Changes"
-    bl_description = "Merge another branch or ref into the current CozyStudio state"
+class COZYSTUDIO_OT_Merge(_CozyOperatorMixin, bpy.types.Operator):
+    bl_idname = "cozystudio.merge"
+    bl_label = "Merge"
+    bl_description = "Merge another branch or ref into the current branch"
 
     ref_name: bpy.props.StringProperty(
         name="Source Branch or Ref",
@@ -374,22 +374,20 @@ class COZYSTUDIO_OT_BringInChanges(_CozyOperatorMixin, bpy.types.Operator):
         default="manual",
     )
 
-    def invoke(self, context, event):
-        if self.ref_name:
-            return self.execute(context)
-        return context.window_manager.invoke_props_dialog(self)
-
-    def draw(self, context):
-        self.layout.prop(self, "ref_name")
-        self.layout.prop(self, "strategy")
-
     def execute(self, context):
         error = self._require_git()
         if error:
             self.report({"ERROR"}, error)
             return {"CANCELLED"}
+        if state.git_instance.repo and state.git_instance.repo.head.is_detached:
+            self.report({"ERROR"}, "Checkout a branch before merging")
+            return {"CANCELLED"}
+        preflight = self._sync_preflight()
+        if preflight:
+            self.report({"ERROR"}, preflight)
+            return {"CANCELLED"}
         if not self.ref_name.strip():
-            self.report({"WARNING"}, "Choose a branch or ref to bring in")
+            self.report({"WARNING"}, "Choose a branch or ref to merge")
             return {"CANCELLED"}
 
         result = state.git_instance.merge(self.ref_name, strategy=self.strategy)
@@ -399,16 +397,16 @@ class COZYSTUDIO_OT_BringInChanges(_CozyOperatorMixin, bpy.types.Operator):
                 return {"CANCELLED"}
         if result.get("conflicts"):
             state.git_instance.refresh_ui_state()
-            self.report({"WARNING"}, "Incoming changes need conflict resolution")
+            self.report({"WARNING"}, "Merge stopped for conflict resolution")
             return {"FINISHED"}
-        self.report({"INFO"}, f"Brought in changes from {self.ref_name}")
+        self.report({"INFO"}, f"Merged {self.ref_name}")
         return {"FINISHED"}
 
 
-class COZYSTUDIO_OT_ReplayMyWork(_CozyOperatorMixin, bpy.types.Operator):
-    bl_idname = "cozystudio.replay_my_work"
-    bl_label = "Replay My Work"
-    bl_description = "Rebase the current branch onto another ref using CozyStudio restore safeguards"
+class COZYSTUDIO_OT_Rebase(_CozyOperatorMixin, bpy.types.Operator):
+    bl_idname = "cozystudio.rebase"
+    bl_label = "Rebase"
+    bl_description = "Rebase the current branch onto another branch or ref"
 
     ref_name: bpy.props.StringProperty(
         name="Onto Branch or Ref",
@@ -426,22 +424,20 @@ class COZYSTUDIO_OT_ReplayMyWork(_CozyOperatorMixin, bpy.types.Operator):
         default="manual",
     )
 
-    def invoke(self, context, event):
-        if self.ref_name:
-            return self.execute(context)
-        return context.window_manager.invoke_props_dialog(self)
-
-    def draw(self, context):
-        self.layout.prop(self, "ref_name")
-        self.layout.prop(self, "strategy")
-
     def execute(self, context):
         error = self._require_git()
         if error:
             self.report({"ERROR"}, error)
             return {"CANCELLED"}
+        if state.git_instance.repo and state.git_instance.repo.head.is_detached:
+            self.report({"ERROR"}, "Checkout a branch before rebasing")
+            return {"CANCELLED"}
+        preflight = self._sync_preflight()
+        if preflight:
+            self.report({"ERROR"}, preflight)
+            return {"CANCELLED"}
         if not self.ref_name.strip():
-            self.report({"WARNING"}, "Choose a branch or ref to replay onto")
+            self.report({"WARNING"}, "Choose a branch or ref to rebase onto")
             return {"CANCELLED"}
 
         result = state.git_instance.rebase(self.ref_name, strategy=self.strategy)
@@ -451,9 +447,9 @@ class COZYSTUDIO_OT_ReplayMyWork(_CozyOperatorMixin, bpy.types.Operator):
                 return {"CANCELLED"}
         if result.get("conflicts"):
             state.git_instance.refresh_ui_state()
-            self.report({"WARNING"}, "Replay stopped for conflict resolution")
+            self.report({"WARNING"}, "Rebase stopped for conflict resolution")
             return {"FINISHED"}
-        self.report({"INFO"}, f"Replayed work onto {self.ref_name}")
+        self.report({"INFO"}, f"Rebased onto {self.ref_name}")
         return {"FINISHED"}
 
 

@@ -83,6 +83,8 @@ class BpyGit(
             self.repo = Repo(self.path, search_parent_directories=False)
             if self.repo.bare:
                 self.repo = None
+            elif Path(self.repo.working_tree_dir).resolve() != self.path:
+                self.repo = None
             else:
                 self.initiated = False
         except (InvalidGitRepositoryError, NoSuchPathError):

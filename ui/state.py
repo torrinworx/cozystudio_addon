@@ -33,6 +33,10 @@ def check_and_init_git():
         try:
             if getattr(git_instance, "path", None) != current_path:
                 git_instance = None
+            elif getattr(git_instance, "repo", None) is not None:
+                working_tree_dir = getattr(git_instance.repo, "working_tree_dir", None)
+                if working_tree_dir is None or Path(working_tree_dir).resolve() != current_path:
+                    git_instance = None
         except Exception:
             git_instance = None
 
@@ -47,7 +51,7 @@ def check_and_init_git():
 
     try:
         if git_instance:
-            redraw("COZYSTUDIO_PT_log")
+            redraw("COZYSTUDIO_PT_history")
     except Exception:
         pass
     return None

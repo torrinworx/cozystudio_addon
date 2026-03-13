@@ -13,17 +13,35 @@ def _repo_ready(git_ui):
 
 
 def _draw_repo_missing(layout):
+    box = layout.box()
+    box.label(text="Welcome to Cozy Studio", icon="INFO")
     if not bpy.data.filepath:
-        layout.label(text="Save this .blend file to start a Cozy project.", icon="INFO")
+        box.label(text="Save this .blend file to start a Cozy project.", icon="FILE_TICK")
         return
-    layout.label(text="No CozyStudio repo found for this file.", icon="INFO")
-    layout.operator("cozystudio.setup_project", text="Setup Project", icon="ADD")
+    box.label(text="No project repo found for this file.", icon="INFO")
+    box.operator("cozystudio.setup_project", text="Init Project", icon="ADD")
+
+
+class COZYSTUDIO_PT_MainPanel(bpy.types.Panel):
+    bl_label = "Cozy Studio"
+    bl_idname = "COZYSTUDIO_PT_main"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Cozy Studio"
+    bl_order = 0
+
+    @classmethod
+    def poll(cls, context):
+        return not _repo_ready(_git_ui())
+
+    def draw(self, context):
+        _draw_repo_missing(self.layout)
 
 
 def _draw_grouped_changes(layout, groups, staged):
     if not groups:
         layout.label(
-            text="No staged changes." if staged else "No pending changes.",
+            text="No staged changes." if staged else "No unstaged changes.",
             icon="CHECKMARK" if staged else "INFO",
         )
         return
@@ -80,77 +98,56 @@ def _draw_grouped_changes(layout, groups, staged):
                 )
                 op.file_path = diff["path"]
 
+            op = row.operator(
+                "cozystudio.revert_change",
+                text="",
+                icon="TRASH",
+            )
+            op.file_path = diff["path"]
+            op.status = diff.get("status", "")
+
             if diff.get("summary"):
                 row.label(text=diff["summary"])
             row.label(text=_status_abbrev(diff["status"]))
 
 
-class COZYSTUDIO_PT_ProjectPanel(bpy.types.Panel):
-    bl_label = "Project"
-    bl_idname = "COZYSTUDIO_PT_project"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "Cozy Studio"
-    bl_order = 0
-
-    def draw(self, context):
-        layout = self.layout
-        git_ui = _git_ui()
-        repo_ui = git_ui.get("repo", {})
-        branch_ui = git_ui.get("branch", {})
-        changes_ui = git_ui.get("changes", {})
-
-        header = layout.row(align=True)
-        header.label(text="Datablock snapshots, not .blend history.", icon="ASSET_MANAGER")
-        header.prop(context.window_manager, "cozystudio_advanced_mode", text="Advanced")
-
-        if not _repo_ready(git_ui):
-            _draw_repo_missing(layout)
-            return
-
-        status = layout.box()
-        status.label(text="Project Status", icon="CHECKMARK")
-        if branch_ui.get("detached"):
-            status.label(text="Viewing a past snapshot", icon="TIME")
-        else:
-            status.label(text=f"On branch: {branch_ui.get('current') or 'unknown'}", icon="CURRENT_FILE")
-        status.label(text=f"Tracked blocks: {repo_ui.get('tracked_blocks', 0)}")
-        status.label(text=f"Groups: {repo_ui.get('tracked_groups', 0)}")
-        status.label(
-            text=(
-                f"Changes: {changes_ui.get('unstaged', 0)} pending / {changes_ui.get('staged', 0)} staged"
-            ),
-            icon="GREASEPENCIL",
-        )
-
-        if context.window_manager.cozystudio_advanced_mode:
-            advanced = layout.box()
-            advanced.label(text="Advanced Details", icon="PREFERENCES")
-            advanced.label(text=f"Repo path: {repo_ui.get('path') or '-'}")
-            advanced.label(text=f"Manifest loaded: {'Yes' if repo_ui.get('has_manifest') else 'No'}")
-            if branch_ui.get("head_hash"):
-                advanced.label(text=f"HEAD: {branch_ui['head_hash']}")
-
-
-class MAIN_PT_Panel(bpy.types.Panel):
+class COZYSTUDIO_PT_ChangesPanel(bpy.types.Panel):
     bl_label = "Changes"
-    bl_idname = "COZYSTUDIO_PT_panel"
+    bl_idname = "COZYSTUDIO_PT_changes"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Cozy Studio"
     bl_order = 1
 
+    @classmethod
+    def poll(cls, context):
+        return _repo_ready(_git_ui())
+
     def draw(self, context):
         layout = self.layout
         git_ui = _git_ui()
 
-        if not _repo_ready(git_ui):
-            _draw_repo_missing(layout)
-            return
-
+        commit_ui = git_ui.get("commit", {})
+        branch_ui = git_ui.get("branch", {})
+        changes_ui = git_ui.get("changes", {})
         integrity_ui = git_ui.get("integrity", {})
         conflicts_ui = git_ui.get("conflicts", {})
-        changes_ui = git_ui.get("changes", {})
+
+        if commit_ui.get("viewing_past"):
+            row = layout.row(align=True)
+            row.label(
+                text=f"Detached at {branch_ui.get('head_short_hash') or 'commit'}",
+                icon="TIME",
+            )
+            if commit_ui.get("return_branch"):
+                op = row.operator("cozystudio.checkout_branch", text="Checkout Branch", icon="LOOP_BACK")
+                op.branch_name = commit_ui["return_branch"]
+
+        layout.prop(context.window_manager, "cozystudio_commit_message", text="Message")
+
+        row = layout.row()
+        row.enabled = commit_ui.get("can_commit")
+        row.operator("cozystudio.commit", text="Commit", icon="CHECKMARK")
 
         if integrity_ui.get("errors"):
             box = layout.box()
@@ -158,63 +155,38 @@ class MAIN_PT_Panel(bpy.types.Panel):
 
         if conflicts_ui.get("has_conflicts"):
             box = layout.box()
-            box.label(text="Unresolved conflicts block snapshots.", icon="ERROR")
+            box.label(text="Unresolved conflicts block commits.", icon="ERROR")
+
+        if commit_ui.get("blockers"):
+            blockers = layout.box()
+            blockers.label(text="Commit blocked", icon="ERROR")
+            for blocker in commit_ui.get("blockers", []):
+                blockers.label(text=blocker)
 
         staged_box = layout.box()
         staged_box.label(text=f"Staged ({changes_ui.get('staged', 0)})", icon="CHECKMARK")
         _draw_grouped_changes(staged_box, changes_ui.get("staged_groups", []), staged=True)
 
         unstaged_box = layout.box()
-        unstaged_box.label(text=f"Pending ({changes_ui.get('unstaged', 0)})", icon="GREASEPENCIL")
+        unstaged_box.label(text=f"Unstaged ({changes_ui.get('unstaged', 0)})", icon="GREASEPENCIL")
         _draw_grouped_changes(unstaged_box, changes_ui.get("unstaged_groups", []), staged=False)
 
 
-class COZYSTUDIO_PT_SnapshotPanel(bpy.types.Panel):
-    bl_label = "Snapshot"
-    bl_idname = "COZYSTUDIO_PT_snapshot"
+class COZYSTUDIO_PT_HistoryPanel(bpy.types.Panel):
+    bl_label = "History"
+    bl_idname = "COZYSTUDIO_PT_history"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Cozy Studio"
     bl_order = 2
 
-    def draw(self, context):
-        layout = self.layout
-        git_ui = _git_ui()
-        if not _repo_ready(git_ui):
-            _draw_repo_missing(layout)
-            return
-
-        snapshot_ui = git_ui.get("snapshot", {})
-        changes_ui = git_ui.get("changes", {})
-        layout.prop(context.window_manager, "cozystudio_commit_message", text="Message")
-        layout.label(text=f"{changes_ui.get('staged', 0)} staged rows ready for snapshot.", icon="CHECKMARK")
-        if snapshot_ui.get("blockers"):
-            blockers = layout.box()
-            blockers.label(text="Snapshot blocked", icon="ERROR")
-            for blocker in snapshot_ui.get("blockers", []):
-                blockers.label(text=blocker)
-        elif not changes_ui.get("staged"):
-            layout.label(text="Stage one or more groups to create a snapshot.", icon="INFO")
-
-        row = layout.row()
-        row.enabled = snapshot_ui.get("can_commit")
-        row.operator("cozystudio.create_snapshot", text="Create Snapshot", icon="CHECKMARK")
-
-
-class COZYSTUDIO_PT_LogPanel(bpy.types.Panel):
-    bl_label = "History"
-    bl_idname = "COZYSTUDIO_PT_log"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "Cozy Studio"
-    bl_order = 3
+    @classmethod
+    def poll(cls, context):
+        return _repo_ready(_git_ui())
 
     def draw(self, context):
         layout = self.layout
         git_ui = _git_ui()
-        if not _repo_ready(git_ui):
-            _draw_repo_missing(layout)
-            return
 
         repo_ui = git_ui.get("repo", {})
         if not repo_ui.get("available"):
@@ -232,18 +204,17 @@ class COZYSTUDIO_PT_LogPanel(bpy.types.Panel):
             item.summary = commit.get("summary", "(no message)")
             item.is_head = bool(commit.get("is_head"))
 
-        snapshot_ui = git_ui.get("snapshot", {})
+        commit_ui = git_ui.get("commit", {})
         branch_ui = git_ui.get("branch", {})
-        if snapshot_ui.get("viewing_past") and branch_ui.get("head_short_hash"):
+        if commit_ui.get("viewing_past") and branch_ui.get("head_short_hash"):
             row = layout.row(align=True)
             row.label(text=f"Detached at {branch_ui['head_short_hash']}", icon="TIME")
-            branch_name = snapshot_ui.get("return_branch")
-            if branch_name:
-                op = row.operator("cozystudio.switch_branch", text="Return", icon="LOOP_BACK")
-                op.branch_name = branch_name
+            if commit_ui.get("return_branch"):
+                op = row.operator("cozystudio.checkout_branch", text="Checkout Branch", icon="LOOP_BACK")
+                op.branch_name = commit_ui["return_branch"]
 
         if not history_items:
-            layout.label(text="No snapshots found.", icon="INFO")
+            layout.label(text="No commits found.", icon="INFO")
             return
 
         layout.template_list(
@@ -256,47 +227,96 @@ class COZYSTUDIO_PT_LogPanel(bpy.types.Panel):
             rows=6,
         )
 
+        selected_index = wm.cozystudio_commit_index
+        if 0 <= selected_index < len(history_items):
+            selected = history_items[selected_index]
+            detail = layout.box()
+            detail.label(text=selected.get("summary", "Commit"), icon="TIME")
+            detail.label(text=selected.get("change_summary", ""))
+            detail.label(
+                text=(
+                    f"Added {selected.get('added_count', 0)}, "
+                    f"Updated {selected.get('modified_count', 0)}, "
+                    f"Removed {selected.get('removed_count', 0)}"
+                )
+            )
+            detail.operator(
+                "cozystudio.checkout_commit",
+                text="Checkout Commit",
+                icon="FILE_REFRESH",
+            ).commit_hash = selected.get("commit_hash", "")
 
-class COZYSTUDIO_PT_SyncPanel(bpy.types.Panel):
-    bl_label = "Sync"
-    bl_idname = "COZYSTUDIO_PT_sync"
+            if selected.get("changes"):
+                detail.separator()
+                detail.label(text="Changed Assets", icon="OUTLINER_COLLECTION")
+                for change in selected.get("changes", []):
+                    change_type = change.get("change")
+                    if change_type == "added":
+                        icon = "ADD"
+                    elif change_type == "removed":
+                        icon = "REMOVE"
+                    else:
+                        icon = "FILE_REFRESH"
+                    detail.label(text=change.get("label", "Change"), icon=icon)
+                remaining = selected.get("total_changes", 0) - len(selected.get("changes", []))
+                if remaining > 0:
+                    detail.label(text=f"...and {remaining} more")
+
+
+class COZYSTUDIO_PT_BranchesPanel(bpy.types.Panel):
+    bl_label = "Branches"
+    bl_idname = "COZYSTUDIO_PT_branches"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Cozy Studio"
-    bl_order = 4
+    bl_order = 3
+
+    @classmethod
+    def poll(cls, context):
+        return _repo_ready(_git_ui())
 
     def draw(self, context):
         layout = self.layout
         git_ui = _git_ui()
-        if not _repo_ready(git_ui):
-            _draw_repo_missing(layout)
-            return
 
         branch_ui = git_ui.get("branch", {})
-        snapshot_ui = git_ui.get("snapshot", {})
-        layout.label(
-            text=(
-                f"Current branch: {branch_ui.get('current')}"
-                if not branch_ui.get("detached")
-                else "Current state: viewing a past snapshot"
-            ),
-            icon="CURRENT_FILE",
-        )
-        if snapshot_ui.get("return_branch"):
-            row = layout.row(align=True)
-            row.label(text=f"Return branch: {snapshot_ui['return_branch']}")
-            op = row.operator("cozystudio.switch_branch", text="Return", icon="LOOP_BACK")
-            op.branch_name = snapshot_ui["return_branch"]
+        commit_ui = git_ui.get("commit", {})
 
-        row = layout.row(align=True)
-        row.operator("cozystudio.bring_in_changes", text="Bring In Changes", icon="IMPORT")
-        row.operator("cozystudio.replay_my_work", text="Replay My Work", icon="TRIA_RIGHT_BAR")
-        if context.window_manager.cozystudio_advanced_mode:
-            advanced = layout.box()
-            advanced.label(text="Advanced Branch State", icon="PREFERENCES")
-            advanced.label(text=f"Detached: {'Yes' if branch_ui.get('detached') else 'No'}")
-            advanced.label(text=f"Last branch: {branch_ui.get('last_branch') or '-'}")
-            advanced.label(text=f"HEAD: {branch_ui.get('head_short_hash') or '-'}")
+        if branch_ui.get("detached"):
+            row = layout.row(align=True)
+            row.label(
+                text=f"Detached at {branch_ui.get('head_short_hash') or 'commit'}",
+                icon="TIME",
+            )
+            if commit_ui.get("return_branch"):
+                op = row.operator("cozystudio.checkout_branch", text="Checkout Branch", icon="LOOP_BACK")
+                op.branch_name = commit_ui["return_branch"]
+        else:
+            layout.label(
+                text=f"Current branch: {branch_ui.get('current') or 'unknown'}",
+                icon="CURRENT_FILE",
+            )
+
+        branches = branch_ui.get("available", [])
+        if not branches:
+            layout.label(text="No local branches found.", icon="INFO")
+            return
+
+        for branch in branches:
+            row = layout.row(align=True)
+            row.label(
+                text=branch.get("name", "branch"),
+                icon="RADIOBUT_ON" if branch.get("is_current") else "BLANK1",
+            )
+            if branch.get("is_current"):
+                continue
+
+            op = row.operator("cozystudio.checkout_branch", text="Checkout", icon="LOOP_BACK")
+            op.branch_name = branch.get("name", "")
+            op = row.operator("cozystudio.merge", text="Merge", icon="IMPORT")
+            op.ref_name = branch.get("name", "")
+            op = row.operator("cozystudio.rebase", text="Rebase", icon="TRIA_RIGHT_BAR")
+            op.ref_name = branch.get("name", "")
 
 
 class COZYSTUDIO_PT_ConflictsPanel(bpy.types.Panel):
@@ -305,27 +325,21 @@ class COZYSTUDIO_PT_ConflictsPanel(bpy.types.Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Cozy Studio"
-    bl_order = 5
+    bl_order = 4
+
+    @classmethod
+    def poll(cls, context):
+        git_ui = _git_ui()
+        return _repo_ready(git_ui) and git_ui.get("conflicts", {}).get("has_conflicts")
 
     def draw(self, context):
         layout = self.layout
-        git_ui = _git_ui()
-        if not _repo_ready(git_ui):
-            _draw_repo_missing(layout)
-            return
-
-        conflicts_ui = git_ui.get("conflicts", {})
-        if not conflicts_ui.get("has_conflicts"):
-            layout.label(text="No unresolved conflicts.", icon="CHECKMARK")
-            return
+        conflicts_ui = _git_ui().get("conflicts", {})
 
         layout.label(text=f"{conflicts_ui.get('count', 0)} unresolved conflicts", icon="ERROR")
-        clear_all = layout.row()
-        clear_all.operator("cozystudio.resolve_conflict", text="Mark All Resolved", icon="CHECKMARK")
+        layout.operator("cozystudio.resolve_conflict", text="Mark All Resolved", icon="CHECKMARK")
         for item in conflicts_ui.get("items", []):
             box = layout.box()
-            if context.window_manager.cozystudio_advanced_mode and item.get("uuid"):
-                box.label(text=item["uuid"], icon="FILE")
             box.label(text=item.get("reason") or "Conflict", icon="ERROR")
             if item.get("uuid"):
                 op = box.operator("cozystudio.resolve_conflict", text="Mark Resolved", icon="CHECKMARK")
@@ -338,14 +352,15 @@ class COZYSTUDIO_PT_DiagnosticsPanel(bpy.types.Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Cozy Studio"
-    bl_order = 6
+    bl_order = 5
+
+    @classmethod
+    def poll(cls, context):
+        return _repo_ready(_git_ui())
 
     def draw(self, context):
         layout = self.layout
         git_ui = _git_ui()
-        if not _repo_ready(git_ui):
-            _draw_repo_missing(layout)
-            return
 
         integrity_ui = git_ui.get("integrity", {})
         capture_ui = git_ui.get("capture", {})
@@ -375,13 +390,3 @@ class COZYSTUDIO_PT_DiagnosticsPanel(bpy.types.Panel):
         )
         for issue in capture_ui.get("issues", []):
             capture_box.label(text=issue.get("reason") or issue.get("status") or "Issue")
-
-        if context.window_manager.cozystudio_advanced_mode:
-            repo_ui = git_ui.get("repo", {})
-            changes_ui = git_ui.get("changes", {})
-            advanced = layout.box()
-            advanced.label(text="Advanced Diagnostics", icon="PREFERENCES")
-            advanced.label(text=f"Repo path: {repo_ui.get('path') or '-'}")
-            advanced.label(text=f"History items cached: {git_ui.get('history', {}).get('count', 0)}")
-            advanced.label(text=f"Pending groups: {len(changes_ui.get('unstaged_groups', []))}")
-            advanced.label(text=f"Staged groups: {len(changes_ui.get('staged_groups', []))}")

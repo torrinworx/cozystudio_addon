@@ -43,8 +43,8 @@ class CheckoutMixin:
 
             self._update_diffs()
 
-            redraw("COZYSTUDIO_PT_panel")
-            redraw("COZYSTUDIO_PT_log")
+            redraw("COZYSTUDIO_PT_changes")
+            redraw("COZYSTUDIO_PT_history")
         finally:
             self.suspend_checks = False
 

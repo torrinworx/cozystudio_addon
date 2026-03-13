@@ -1,125 +1,79 @@
-# Cozy Studio Add-on Overhaul Plan
+# Cozy Studio Add-on Plan
 
-This file tracks the implementation plan for the Cozy Studio Blender add-on overhaul.
+Current direction:
 
-Core product rules:
+- Use standard Git terminology in the UI.
+- Keep the main workflow simple: `Changes`, `History`, `Branches`.
+- Treat `.cozystudio/manifest.json` and `.cozystudio/blocks/*.json` as the only tracked history artifacts.
+- Rebuild scene state from tracked datablocks for commit checkout and branch checkout.
+- Handle stash/carryover behavior automatically later instead of exposing extra workflow complexity now.
 
-- Native Blender save remains untouched.
-- Normal `.blend` saves are ignored by Cozy snapshot history.
-- Cozy history is driven by `.cozystudio/manifest.json` and `.cozystudio/blocks/*.json`.
-- `.blend` skeleton/bootstrap handling is only for project init/open/clone/recovery, not for every snapshot.
-- Restore, branch switching, merge results, and history navigation rebuild from tracked datablocks.
+## Foundation
 
-## Tracking
+- [x] Commit only Cozy tracked artifacts by default
+- [x] Ignore normal `.blend` saves in Cozy history
+- [x] Route restore and branch switching through datablock reconstruction
+- [x] Expose a consolidated UI state payload from the backend
+- [x] Build grouped semantic diffs for tracked datablocks
 
-- [x] Record the approved overhaul plan in `cozystudio_addon/PLAN.md`
+## 1. Git-Native UI Shell
 
-## Phase 1 - History Model Cleanup
+- [x] Make `Changes` the main work surface
+- [x] Put commit message, commit action, staged changes, and unstaged changes in `Changes`
+- [x] Keep `History` focused on commit inspection and `Checkout Commit`
+- [x] Add a `Branches` panel for branch checkout, merge, and rebase
+- [x] Remove redundant top-level panels and abstract product-language copy
+- [x] Show `Conflicts` only when conflicts exist
+- [x] Keep `Diagnostics` separate and minimal
 
-- [x] Remove bootstrap `.blend` writes from normal snapshot commits
-- [x] Stop staging bootstrap `.blend` files during snapshot commits
-- [x] Keep `.blend` files excluded from regular change detection and staging
-- [x] Make manifest and block files the only committed history artifacts by default
-- [x] Verify snapshot commits work without committed `.blend` binaries
+## 2. Operator and Copy Cleanup
 
-## Phase 2 - Open / Restore / Switch Pipeline
+- [x] Rename UI operators and labels to Git terms (`commit`, `checkout commit`, `checkout branch`, `merge`, `rebase`)
+- [x] Remove compatibility aliases and unused experimental operators
+- [x] Keep safe preflight checks for commit, checkout, merge, and rebase
+- [x] Keep detached-head handling explicit and understandable in the UI
 
-- [x] Introduce one backend restore entrypoint for ref restore and working-tree reconstruction
-- [x] Route branch switching through the same safe restore path as snapshot restore
-- [x] Limit bootstrap shell creation to init/open/clone/recovery flows
-- [x] Preserve orphan cleanup and dependency-ordered restore in every reconstruction path
-- [x] Verify restore and ref switching work from manifest and block files alone
+## 3. Branch and History Workflows
 
-## Phase 3 - Consolidated UI State API
+- [x] Make commit checkout clearly detached-head aware
+- [x] Provide a clear return path from detached HEAD back to a branch checkout
+- [x] Keep merge and rebase available from `Branches` without extra panel sprawl
+- [x] Avoid exposing unnecessary Git detail until the workflow needs it
 
-- [x] Add a single UI-facing state payload on `BpyGit`
-- [x] Include repo state, branch state, past-snapshot state, conflicts, integrity, and change counts
-- [x] Stop having panels read scattered backend internals directly
-- [x] Make panel rendering depend on the consolidated state payload
+## 4. Conflict Handling
 
-## Phase 4 - Semantic Diff Layer
+- [ ] Upgrade manifest conflict entries into structured UI-friendly records
+- [ ] Show blocking conflict state in the main workflow when present
+- [ ] Keep a dedicated `Conflicts` panel only for active resolution work
+- [ ] Add backend helpers for per-conflict resolution and merge finalization
 
-- [x] Enrich diff rows with UUID, datablock type, group ID, display name, and summary
-- [x] Add human-readable summaries for transforms, creation/deletion, collection changes, materials, and animation edits
-- [x] Add safe generic fallback summaries for unsupported fine-grained diff cases
-- [x] Keep grouping aligned with backend object/shared/orphan group logic
+## 5. Diagnostics and Trust Signals
 
-## Phase 5 - UI Shell Rewrite
+- [ ] Show integrity problems, capture issues, missing blocks, and last-operation failures clearly
+- [ ] Persist important warnings until they are resolved
+- [ ] Avoid relying on console output as the only user-visible error signal
 
-- [x] Replace the current experimental panels with a state-driven shell
-- [x] Create `Project` panel for setup and project status
-- [x] Create `Changes` panel for grouped asset/datablock changes
-- [x] Create `Snapshot` panel as the main commit surface
-- [x] Create `History` panel for timeline and restore flows
-- [x] Create `Sync` panel for branch/merge/rebase workflows
-- [x] Create `Conflicts` panel for resolution workflows
-- [x] Create `Diagnostics` panel for integrity and system status
-- [x] Add an `Advanced` mode for raw Git-oriented details
+## 6. Automatic Carryover / Stash Behavior
 
-## Phase 6 - Operator Redesign
+- [ ] Define expected behavior for uncommitted Cozy changes during branch checkout and commit checkout
+- [ ] Auto-stash Cozy changes before checkout flows and reapply them when appropriate
+- [ ] Surface recovery UI when stash apply fails or conflicts are introduced
+- [ ] Preserve commit history integrity while carryover logic is active
 
-- [x] Replace or wrap placeholder operators with product-language operators
-- [x] Add project setup, snapshot, restore, branch switch, merge, rebase, conflict resolve, and diagnostics operators
-- [x] Remove direct unsafe branch checkout behavior from the UI layer
-- [x] Keep temporary compatibility shims for legacy operator names while migrating tests
+## 7. Testing
 
-## Phase 7 - Snapshot Flow Hardening
+- [x] Update registration and integration tests for the Git-native shell
+- [x] Add coverage for commit checkout and branch checkout reconstruction
+- [x] Add coverage for commit preflight blockers
+- [x] Add coverage for merge/rebase UI flows
+- [ ] Add coverage for structured conflict generation and resolution
+- [ ] Add coverage for future stash/carryover behavior
 
-- [x] Add structured preflight checks for snapshot actions
-- [x] Keep snapshot blocking on integrity errors and unresolved conflicts
-- [x] Return structured backend results for UI feedback instead of bool-only outcomes
-- [x] Preserve grouped staging behavior for related datablocks
-
-## Phase 8 - History Timeline
-
-- [ ] Replace the minimal commit list with richer snapshot timeline items
-- [ ] Add snapshot detail inspection with changed asset summaries
-- [ ] Add restore actions from history items
-- [ ] Add explicit `Viewing Past Snapshot` state and `Return to Branch` flow
-
-## Phase 9 - Sync / Branch / Merge / Rebase
-
-- [ ] Build a user-facing sync workflow over the existing merge/rebase backend
-- [ ] Rename merge to `Bring In Changes` in the main UX
-- [ ] Rename rebase to `Replay My Work` in the main UX
-- [ ] Add preflight and safety checks for branch/sync operations
-- [ ] Keep advanced branch operations hidden until the main workflow is stable
-
-## Phase 10 - Conflict Model Upgrade
-
-- [ ] Upgrade manifest conflict entries to structured records for UI use
-- [ ] Store asset name, type, group, reason, tier, and allowed actions in conflict entries
-- [ ] Add backend methods for per-conflict resolution
-- [ ] Add a finalize-merge path once conflicts are resolved
-- [ ] Surface a blocking conflicts banner and dedicated conflict resolution UI
-
-## Phase 11 - Diagnostics
-
-- [ ] Add a diagnostics view for manifest integrity, missing blocks, orphan cleanup issues, unsupported data, and last operation log
-- [ ] Persist warnings until they are resolved
-- [ ] Make trust-critical backend problems visible without using raw console output as the only signal
-
-## Phase 12 - UI State / Props Refactor
-
-- [ ] Expand UI props for active section, filters, selected history item, selected branch/ref, selected conflict, snapshot message, and advanced mode
-- [ ] Move heavy panel state preparation out of panel draw methods
-- [ ] Build reusable UI helpers for state-driven rendering
-
-## Phase 13 - Testing and Regression Coverage
-
-- [ ] Add tests proving snapshots do not commit or depend on `.blend` binaries
-- [ ] Add tests for restore and branch switch reconstruction from manifest/block data
-- [ ] Add tests for semantic diff payload generation
-- [ ] Add tests for snapshot preflight behavior
-- [ ] Add tests for merge/rebase UI-facing flows
-- [ ] Add tests for structured conflict generation and resolution
-- [ ] Update UI registration and operator coverage tests for the new shell
-
-## Definition Of Done
+## Done When
 
 - [ ] Users can save `.blend` files normally without Cozy interfering
-- [ ] Snapshot history commits only Cozy tracked artifacts
-- [ ] Restore and branch switching rebuild from manifest and block files
-- [ ] The main workflow avoids raw Git jargon for typical Blender users
-- [ ] Conflicts are visible, blocking, and resolvable in UI
-- [ ] Diagnostics explain integrity problems clearly
+- [ ] Commit history contains only Cozy tracked artifacts
+- [ ] Commit checkout and branch checkout rebuild from manifest and block files
+- [ ] The UI uses clear Git terminology and stays easy to navigate
+- [ ] Conflicts appear only when needed and can be resolved in the UI
+- [ ] Diagnostics make trust-critical problems visible

@@ -18,11 +18,6 @@ def register_props():
         description="Message for this commit",
         default="",
     )
-    bpy.types.WindowManager.cozystudio_advanced_mode = bpy.props.BoolProperty(
-        name="Advanced Mode",
-        description="Show raw Git-oriented details in the Cozy Studio UI",
-        default=False,
-    )
 
 
 def unregister_props():
@@ -32,5 +27,3 @@ def unregister_props():
         del bpy.types.WindowManager.cozystudio_commit_index
     if hasattr(bpy.types.WindowManager, "cozystudio_commit_message"):
         del bpy.types.WindowManager.cozystudio_commit_message
-    if hasattr(bpy.types.WindowManager, "cozystudio_advanced_mode"):
-        del bpy.types.WindowManager.cozystudio_advanced_mode

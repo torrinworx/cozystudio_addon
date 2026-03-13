@@ -115,8 +115,8 @@ class MergeMixin:
 
             self.restore_ref()
             self._update_diffs()
-            redraw("COZYSTUDIO_PT_panel")
-            redraw("COZYSTUDIO_PT_log")
+            redraw("COZYSTUDIO_PT_changes")
+            redraw("COZYSTUDIO_PT_history")
         except Exception as e:
             errors.append(str(e))
         finally:

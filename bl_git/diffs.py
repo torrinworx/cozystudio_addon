@@ -93,6 +93,6 @@ class DiffsMixin:
 
         if self.diffs != final_diffs:
             self.diffs = final_diffs
-            redraw("COZYSTUDIO_PT_panel")
+            redraw("COZYSTUDIO_PT_changes")
 
         self.refresh_ui_state()

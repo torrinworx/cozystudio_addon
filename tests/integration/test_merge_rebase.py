@@ -169,7 +169,7 @@ def test_rebase_replays_commits():
 
 
 @pytest.mark.order(23)
-def test_product_language_sync_and_conflict_operators():
+def test_merge_and_conflict_operators():
     ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
     git_inst = init_git_repo_for_test(ui_mod)
     clear_manifest_conflicts(git_inst)
@@ -186,7 +186,7 @@ def test_product_language_sync_and_conflict_operators():
     assert wait_for_block_file(git_inst, uuid)
 
     _stage_group(git_inst, uuid)
-    result = bpy.ops.cozystudio.create_snapshot("EXEC_DEFAULT", message="Base state")
+    result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Base state")
     assert "FINISHED" in result
     base_commit = git_inst.repo.head.commit.hexsha
 
@@ -194,14 +194,14 @@ def test_product_language_sync_and_conflict_operators():
     obj.location.x = 2.0
     git_inst._check()
     _stage_group(git_inst, uuid)
-    result = bpy.ops.cozystudio.create_snapshot("EXEC_DEFAULT", message="Feature state")
+    result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Feature state")
     assert "FINISHED" in result
 
     git_inst.repo.git.checkout(base_branch)
     git_inst.checkout(base_commit)
     git_inst.refresh_all()
 
-    result = bpy.ops.cozystudio.bring_in_changes(
+    result = bpy.ops.cozystudio.merge(
         "EXEC_DEFAULT", ref_name="feature_operator_merge", strategy="manual"
     )
     assert "FINISHED" in result

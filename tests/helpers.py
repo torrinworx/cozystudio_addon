@@ -97,9 +97,9 @@ def init_git_repo_for_test(ui_mod, timeout=5.0):
     if git_inst is None:
         raise RuntimeError("git_instance was never created")
 
-    result = bpy.ops.cozystudio.init_repo()
+    result = bpy.ops.cozystudio.setup_project()
     if "FINISHED" not in result and "CANCELLED" not in result:
-        raise RuntimeError(f"init_repo returned {result}")
+        raise RuntimeError(f"setup_project returned {result}")
 
     time.sleep(0.5)
     if not getattr(git_inst, "initiated", False):

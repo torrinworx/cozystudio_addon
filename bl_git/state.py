@@ -53,8 +53,9 @@ class StateMixin:
                 "head_short_hash": None,
                 "head_summary": None,
                 "last_branch": getattr(self, "last_branch", None),
+                "available": [],
             },
-            "snapshot": {
+            "commit": {
                 "viewing_past": False,
                 "return_branch": None,
                 "can_commit": False,
@@ -407,7 +408,7 @@ class StateMixin:
             ui_state["branch"]["detached"] = detached
 
             if detached:
-                ui_state["snapshot"]["viewing_past"] = True
+                ui_state["commit"]["viewing_past"] = True
                 return_branch = None
                 if self.last_branch and self.last_branch in self.repo.heads:
                     return_branch = self.last_branch
@@ -417,12 +418,23 @@ class StateMixin:
                     return_branch = "master"
                 elif self.repo.heads:
                     return_branch = self.repo.heads[0].name
-                ui_state["snapshot"]["return_branch"] = return_branch
+                ui_state["commit"]["return_branch"] = return_branch
+                ui_state["commit"]["blockers"].append(
+                    "Checkout a branch before committing."
+                )
             else:
                 try:
                     ui_state["branch"]["current"] = self.repo.active_branch.name
                 except Exception:
                     ui_state["branch"]["current"] = None
+
+            ui_state["branch"]["available"] = [
+                {
+                    "name": head.name,
+                    "is_current": head.name == ui_state["branch"].get("current"),
+                }
+                for head in sorted(self.repo.heads, key=lambda item: item.name)
+            ]
 
             try:
                 commits = list(self.repo.iter_commits(all=True, max_count=10))
@@ -474,13 +486,13 @@ class StateMixin:
             name_cache,
         )
         if ui_state["capture"]["has_issues"]:
-            ui_state["snapshot"]["blockers"].append("Resolve capture issues before saving a snapshot.")
+            ui_state["commit"]["blockers"].append("Resolve capture issues before committing.")
         if not ui_state["integrity"].get("ok", True):
-            ui_state["snapshot"]["blockers"].append("Fix manifest integrity errors before saving a snapshot.")
+            ui_state["commit"]["blockers"].append("Fix manifest integrity errors before committing.")
         if ui_state["conflicts"]["has_conflicts"]:
-            ui_state["snapshot"]["blockers"].append("Resolve conflicts before saving a snapshot.")
-        ui_state["snapshot"]["can_commit"] = (
-            ui_state["changes"]["staged"] > 0 and not ui_state["snapshot"]["blockers"]
+            ui_state["commit"]["blockers"].append("Resolve conflicts before committing.")
+        ui_state["commit"]["can_commit"] = (
+            ui_state["changes"]["staged"] > 0 and not ui_state["commit"]["blockers"]
         )
 
         self.ui_state = ui_state
