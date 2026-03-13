@@ -2,7 +2,7 @@ import bpy
 
 from .replication.exception import ContextError
 from .replication.protocol import ReplicatedDatablock
-from .utils import get_preferences
+from .utils import get_sync_flag
 from .bl_action import (dump_animation_data, load_animation_data,
                         resolve_animation_dependencies)
 from .bl_datablock import resolve_datablock_from_uuid
@@ -123,7 +123,7 @@ class BlMesh(ReplicatedDatablock):
 
     @staticmethod
     def dump(datablock: object) -> dict:
-        if (datablock.is_editmode or bpy.context.mode == "SCULPT") and not get_preferences().sync_flags.sync_during_editmode:
+        if (datablock.is_editmode or bpy.context.mode == "SCULPT") and not get_sync_flag("sync_during_editmode"):
             raise ContextError("Mesh is in edit mode")
         mesh = datablock
 
@@ -207,9 +207,23 @@ class BlMesh(ReplicatedDatablock):
         return resolve_datablock_from_uuid(uuid, bpy.data.meshes)
 
     @staticmethod
+    def mode_policy(datablock: object, operation: str) -> dict:
+        if get_sync_flag("sync_during_editmode"):
+            return {"state": "safe", "mode": None, "reason": ""}
+
+        if datablock.is_editmode or bpy.context.mode == "SCULPT":
+            return {
+                "state": "requires_mode_switch",
+                "mode": "OBJECT",
+                "reason": "Mesh capture requires leaving Edit or Sculpt mode.",
+            }
+
+        return {"state": "safe", "mode": None, "reason": ""}
+
+    @staticmethod
     def needs_update(datablock: object, data: dict) -> bool:
         return ('EDIT' not in bpy.context.mode and bpy.context.mode != 'SCULPT') \
-            or get_preferences().sync_flags.sync_during_editmode
+            or get_sync_flag("sync_during_editmode")
 
 
 _type = bpy.types.Mesh

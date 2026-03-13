@@ -63,6 +63,7 @@ class BpyGit(
         self.last_branch = None
         self.suspend_checks = False
         self.last_integrity_report = None
+        self.last_capture_issues = []
 
         self.check_interval = check_interval
 

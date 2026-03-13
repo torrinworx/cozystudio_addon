@@ -67,12 +67,13 @@ class CheckoutMixin:
 
         self._cleanup_orphans(valid=set(valid_manifest_blocks.keys()))
 
-        entries, blocks, groups = self._current_state()
+        entries, blocks, groups, issues = self._current_state(interactive=False)
         self.state = {
             "entries": entries or {},
             "blocks": blocks or {},
             "groups": groups or {},
         }
+        self.last_capture_issues = issues
 
     def deserialize(self, data: dict):
         print("DATA: ", data)
@@ -84,7 +85,7 @@ class CheckoutMixin:
         restored_data = self.bpy_protocol.resolve(data)
         if restored_data is None:
             restored_data = self.bpy_protocol.construct(data)
-        self.bpy_protocol.load(data, restored_data)
+        self.bpy_protocol.apply(data, restored_data, interactive=True)
 
         restored_uuid = data.get("uuid")
         if restored_uuid:

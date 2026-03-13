@@ -1,7 +1,7 @@
 import bpy
 import bpy.types as T
 
-from .utils import get_preferences
+from .utils import get_sync_flag
 from .replication.protocol import ReplicatedDatablock
 from .dump_anything import Dumper, Loader, np_load_collection, np_dump_collection
 from .bl_material import dump_materials_slots, load_materials_slots
@@ -240,9 +240,20 @@ class BlCurve(ReplicatedDatablock):
         return deps
 
     @staticmethod
+    def mode_policy(datablock: object, operation: str) -> dict:
+        if 'EDIT' in bpy.context.mode and not get_sync_flag("sync_during_editmode"):
+            return {
+                "state": "requires_mode_switch",
+                "mode": "OBJECT",
+                "reason": "Curve capture requires leaving Edit mode.",
+            }
+
+        return {"state": "safe", "mode": None, "reason": ""}
+
+    @staticmethod
     def needs_update(datablock: object, data: dict) -> bool:
         return 'EDIT' not in bpy.context.mode \
-            or get_preferences().sync_flags.sync_during_editmode
+            or get_sync_flag("sync_during_editmode")
 
 
 _type = [bpy.types.Curve, bpy.types.TextCurve]

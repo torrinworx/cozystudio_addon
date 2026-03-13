@@ -1,8 +1,7 @@
 import bpy
 
 from .replication.protocol import ReplicatedDatablock
-from .utils import is_annotating
-from .utils import get_preferences
+from .utils import get_sync_flag, is_annotating
 from .bl_datablock import resolve_datablock_from_uuid
 from .bl_material import dump_materials_slots, load_materials_slots
 from .dump_anything import (Dumper, Loader, np_dump_collection,
@@ -257,7 +256,7 @@ class BlGpencil3(ReplicatedDatablock):
         return bpy.context.mode == 'OBJECT' \
             or layer_changed(datablock, data) \
             or frame_changed(data) \
-            or get_preferences().sync_flags.sync_during_editmode \
+            or get_sync_flag("sync_during_editmode") \
             or is_annotating(bpy.context)
 
 

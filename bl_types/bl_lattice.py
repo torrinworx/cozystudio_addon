@@ -68,6 +68,17 @@ class BlLattice(ReplicatedDatablock):
     def resolve_deps(datablock: object) -> list[object]:
         return resolve_animation_dependencies(datablock)
 
+    @staticmethod
+    def mode_policy(datablock: object, operation: str) -> dict:
+        if datablock.is_editmode:
+            return {
+                "state": "requires_mode_switch",
+                "mode": "OBJECT",
+                "reason": "Lattice capture requires leaving Edit mode.",
+            }
+
+        return {"state": "safe", "mode": None, "reason": ""}
+
 
 _type = bpy.types.Lattice
 _class = BlLattice

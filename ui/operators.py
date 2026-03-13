@@ -45,6 +45,10 @@ class COMMMIT_OT_PrintOperator(bpy.types.Operator):
 
         ok = state.git_instance.commit(message=message)
         if not ok:
+            capture_issues = getattr(state.git_instance, "last_capture_issues", None) or []
+            if capture_issues and capture_issues[0].get("reason"):
+                self.report({"ERROR"}, capture_issues[0]["reason"])
+                return {"CANCELLED"}
             report = getattr(state.git_instance, "last_integrity_report", None)
             if report and report.get("errors"):
                 self.report({"ERROR"}, report["errors"][0])
@@ -67,6 +71,9 @@ class COZYSTUDIO_OT_ManualRefresh(bpy.types.Operator):
             return {"CANCELLED"}
 
         state.git_instance.refresh_all()
+        capture_issues = getattr(state.git_instance, "last_capture_issues", None) or []
+        if capture_issues and capture_issues[0].get("reason"):
+            self.report({"WARNING"}, capture_issues[0]["reason"])
         report = state.git_instance.validate_manifest_integrity()
         state.git_instance.last_integrity_report = report
         if not report.get("ok") and report.get("errors"):

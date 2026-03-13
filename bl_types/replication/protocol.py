@@ -1,3 +1,7 @@
+from .exception import ContextError
+from ..mode_context import mode_session, resolve_owner_object
+
+
 class ReplicatedDatablock(object):
     """
     Datablock translation definition to handle DCC<->Replication data exchange.
@@ -76,6 +80,10 @@ class ReplicatedDatablock(object):
         """
         return True
 
+    @staticmethod
+    def mode_policy(datablock: object, operation: str) -> dict:
+        return {"state": "safe", "mode": None, "reason": ""}
+
     # TODO: Add back once we figure out how to get pip packages into blender add-on dev env
     # @staticmethod
     # def compute_delta(last_data:dict, current_data: dict)-> Delta:
@@ -150,6 +158,51 @@ class DataTranslationProtocol(object):
 
         return data
 
+    def capture(self, datablock: object, stamp_uuid: str = None, interactive: bool = False) -> dict:
+        type_id = type(datablock).__name__
+        implementation = self._supported_types.get(type_id)
+        policy = implementation.mode_policy(datablock, "dump")
+
+        if policy.get("state") == "blocked":
+            return {
+                "status": "blocked",
+                "reason": policy.get("reason") or "Capture is blocked in the current mode.",
+                "type_id": type_id,
+            }
+
+        if policy.get("state") == "requires_mode_switch" and not interactive:
+            return {
+                "status": "deferred",
+                "reason": policy.get("reason") or "Capture requires a temporary mode change.",
+                "type_id": type_id,
+            }
+
+        if policy.get("state") == "requires_mode_switch":
+            owner = resolve_owner_object(datablock)
+            if owner is None and type_id != "Object":
+                return {
+                    "status": "blocked",
+                    "reason": policy.get("reason") or "Capture requires an owner object.",
+                    "type_id": type_id,
+                }
+
+        try:
+            with mode_session(datablock, policy, interactive):
+                data = implementation.dump(datablock)
+                deps = implementation.resolve_deps(datablock)
+        except ContextError as exc:
+            return {
+                "status": "blocked" if interactive else "deferred",
+                "reason": str(exc) or policy.get("reason") or "Capture failed in the current mode.",
+                "type_id": type_id,
+            }
+
+        data["type_id"] = type_id
+        if stamp_uuid:
+            data["uuid"] = stamp_uuid
+
+        return {"status": "ok", "data": data, "deps": deps}
+
     def load(self, data: dict, datablock: object):
         """
         Load extracted data into the given datablock.
@@ -161,6 +214,20 @@ class DataTranslationProtocol(object):
         """
         type_id = data.get('type_id')
         self._supported_types.get(type_id).load(data, datablock)
+
+    def apply(self, data: dict, datablock: object, interactive: bool = True):
+        type_id = data.get("type_id")
+        implementation = self._supported_types.get(type_id)
+        policy = implementation.mode_policy(datablock, "load")
+
+        if policy.get("state") == "blocked":
+            raise ContextError(policy.get("reason") or "Load is blocked in the current mode.")
+
+        if policy.get("state") == "requires_mode_switch" and not interactive:
+            raise ContextError(policy.get("reason") or "Load requires a temporary mode change.")
+
+        with mode_session(datablock, policy, interactive):
+            implementation.load(data, datablock)
 
     def resolve(self, data: dict) -> object:
         """

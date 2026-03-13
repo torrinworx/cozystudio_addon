@@ -101,7 +101,12 @@ class OpsMixin:
         if self.manifest is None or not self.repo:
             return False
         try:
-            self._check()
+            self._check(interactive=True)
+            if self.last_capture_issues:
+                print("[BpyGit] Commit blocked by capture issues:")
+                for issue in self.last_capture_issues:
+                    print(" -", issue.get("reason"))
+                return False
             self._ensure_state()
 
             integrity = self.validate_manifest_integrity()
@@ -156,14 +161,15 @@ class OpsMixin:
         finally:
             self._update_diffs()
 
-    def _check(self):
+    def _check(self, interactive=False):
         if self.suspend_checks:
             return self.check_interval
         prev_entries = self.state.get("entries") if self.state else None
         if prev_entries is None:
             prev_entries = {}
 
-        entries, blocks, groups = self._current_state()
+        entries, blocks, groups, issues = self._current_state(interactive=interactive)
+        self.last_capture_issues = issues
         if not entries:
             return self.check_interval
 
@@ -188,7 +194,7 @@ class OpsMixin:
     def refresh_all(self):
         if not self.initiated:
             return
-        self._check()
+        self._check(interactive=True)
         self._update_diffs()
         redraw("COZYSTUDIO_PT_panel")
         redraw("COZYSTUDIO_PT_log")

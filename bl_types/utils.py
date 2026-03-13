@@ -133,6 +133,18 @@ def get_preferences():
         return bpy.context.preferences.addons[__package__].preferences
 
 
+def get_sync_flag(flag_name, default=False):
+    prefs = get_preferences()
+    if prefs is None:
+        return default
+
+    sync_flags = getattr(prefs, "sync_flags", None)
+    if sync_flags is None:
+        return default
+
+    return bool(getattr(sync_flags, flag_name, default))
+
+
 def current_milli_time():
     return int(round(time.time() * 1000))
 

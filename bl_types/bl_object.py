@@ -4,7 +4,7 @@ import mathutils
 from .replication.exception import ContextError
 from .replication.protocol import ReplicatedDatablock
 
-from .utils import get_preferences
+from .utils import get_sync_flag
 from .bl_action import (dump_animation_data, load_animation_data,
                         resolve_animation_dependencies)
 from .bl_datablock import get_datablock_from_uuid, resolve_datablock_from_uuid
@@ -583,7 +583,7 @@ class BlObject(ReplicatedDatablock):
     @staticmethod
     def dump(datablock: object) -> dict:
         if _is_editmode(datablock):
-            if get_preferences().sync_flags.sync_during_editmode:
+            if get_sync_flag("sync_during_editmode"):
                 datablock.update_from_editmode()
             else:
                 raise ContextError("Object is in edit-mode.")
@@ -764,6 +764,17 @@ class BlObject(ReplicatedDatablock):
         deps.extend(resolve_animation_dependencies(datablock))
 
         return deps
+
+    @staticmethod
+    def mode_policy(datablock: object, operation: str) -> dict:
+        if _is_editmode(datablock) and not get_sync_flag("sync_during_editmode"):
+            return {
+                "state": "requires_mode_switch",
+                "mode": "OBJECT",
+                "reason": "Object capture requires leaving the child datablock edit mode.",
+            }
+
+        return {"state": "safe", "mode": None, "reason": ""}
 
     @staticmethod
     def resolve(data: dict) -> object:

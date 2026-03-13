@@ -9,14 +9,13 @@ from .json_io import serialize_json_data
 
 
 class StateMixin:
-    def _serialize(self, block, stamp_uuid=None) -> str:
-        data = self.bpy_protocol.dump(block, stamp_uuid=stamp_uuid)
-        return serialize_json_data(data)
-
-    def _current_state(self):
+    def _current_state(self, interactive=False):
         entries = {}
         blocks = {}
         db_by_uuid = {}
+        issues = []
+        previous_entries = (self.state or {}).get("entries", {})
+        previous_blocks = (self.state or {}).get("blocks", {})
 
         for type_name, impl_class in self.bpy_protocol.implementations.items():
             if not hasattr(bpy.data, impl_class.bl_id):
@@ -31,8 +30,33 @@ class StateMixin:
                 cozystudio_uuid = getattr(db, "cozystudio_uuid", None)
                 if not cozystudio_uuid:
                     continue
-                deps = self._resolve_deps(db, owner_uuid=cozystudio_uuid)
-                target = self._serialize(db, stamp_uuid=cozystudio_uuid)
+
+                captured = self.bpy_protocol.capture(
+                    db,
+                    stamp_uuid=cozystudio_uuid,
+                    interactive=interactive,
+                )
+                if captured["status"] != "ok":
+                    issue = dict(captured)
+                    issue["uuid"] = cozystudio_uuid
+                    issue["name"] = getattr(db, "name", cozystudio_uuid)
+                    issue["type"] = impl_class.bl_id
+                    issues.append(issue)
+
+                    if not interactive and cozystudio_uuid in previous_entries and cozystudio_uuid in previous_blocks:
+                        entries[cozystudio_uuid] = previous_entries[cozystudio_uuid]
+                        blocks[cozystudio_uuid] = previous_blocks[cozystudio_uuid]
+                        db_by_uuid[cozystudio_uuid] = db
+                    continue
+
+                deps = []
+                for dep in captured["deps"] or []:
+                    normalized = self._normalize_dep(dep)
+                    if normalized is None or normalized == cozystudio_uuid or normalized in deps:
+                        continue
+                    deps.append(normalized)
+
+                target = serialize_json_data(captured["data"])
                 hash_value = DeepHash(target)
                 entries[cozystudio_uuid] = {
                     "type": impl_class.bl_id,
@@ -48,16 +72,17 @@ class StateMixin:
             if uuid in entries:
                 entries[uuid][MANIFEST_GROUP_KEY] = group_id
 
-        return entries, blocks, groups
+        return entries, blocks, groups, issues
 
     def _ensure_state(self):
         if self.state is None:
-            entries, blocks, groups = self._current_state()
+            entries, blocks, groups, issues = self._current_state()
             self.state = {
                 "entries": entries or {},
                 "blocks": blocks or {},
                 "groups": groups or {},
             }
+            self.last_capture_issues = issues
 
     def _is_shared_block(self, uuid, entries, db_by_uuid) -> bool:
         entry = entries.get(uuid)
@@ -153,24 +178,6 @@ class StateMixin:
         if isinstance(dep, str) and dep:
             return dep
         return None
-
-    def _resolve_deps(self, datablock, owner_uuid=None) -> list:
-        deps = []
-        try:
-            raw_deps = self.bpy_protocol.resolve_deps(datablock)
-        except Exception as e:
-            print(f"[BpyGit] resolve_deps failed for {datablock}: {e}")
-            return deps
-
-        for dep in raw_deps or []:
-            normalized = self._normalize_dep(dep)
-            if normalized is None:
-                continue
-            if owner_uuid and normalized == owner_uuid:
-                continue
-            if normalized not in deps:
-                deps.append(normalized)
-        return deps
 
     def _extract_dep_uuids(self, deps) -> list[str]:
         uuids = []
