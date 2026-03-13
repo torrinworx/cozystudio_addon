@@ -17,6 +17,65 @@ from .constants import (
 
 
 class OpsMixin:
+    def snapshot_preflight(self):
+        result = {
+            "ok": False,
+            "errors": [],
+            "warnings": [],
+            "blockers": [],
+            "staged_paths": [],
+            "group_stage_paths": [],
+            "staged_count": 0,
+            "issues": [],
+            "integrity": None,
+            "conflicts": {},
+            "can_commit": False,
+        }
+        if self.manifest is None or not self.repo:
+            result["errors"].append("Repository is not initialized.")
+            return result
+
+        self._check(interactive=True)
+        if self.last_capture_issues:
+            result["issues"] = [dict(issue) for issue in self.last_capture_issues]
+            for issue in result["issues"]:
+                reason = issue.get("reason") or issue.get("status") or "Capture issue"
+                result["blockers"].append(reason)
+
+        integrity = self.validate_manifest_integrity()
+        self.last_integrity_report = integrity
+        result["integrity"] = integrity
+        if not integrity.get("ok"):
+            for err in integrity.get("errors", []):
+                result["blockers"].append(err)
+
+        conflicts = self.manifest.get("conflicts") if isinstance(self.manifest, dict) else None
+        if conflicts:
+            result["conflicts"] = conflicts
+            result["blockers"].append("Unresolved conflicts present in manifest.")
+
+        entries = (self.state or {}).get("entries", {})
+        groups = (self.state or {}).get("groups", {})
+        staged_paths = {
+            path
+            for (path, stage) in self.repo.index.entries.keys()
+            if stage == 0
+        }
+        group_stage_paths = self._group_stage_paths(staged_paths, entries, groups)
+        result["staged_paths"] = sorted(staged_paths)
+        result["group_stage_paths"] = list(group_stage_paths)
+        if group_stage_paths:
+            result["staged_count"] = len(group_stage_paths)
+        else:
+            result["staged_count"] = len(staged_paths)
+
+        if result["staged_count"] == 0:
+            result["blockers"].append("No staged changes to snapshot.")
+
+        result["can_commit"] = not result["blockers"]
+        result["ok"] = result["can_commit"]
+        return result
+
     def init(self):
         if not self.initiated:
             self.cozystudio_path.mkdir(exist_ok=True)
@@ -100,40 +159,17 @@ class OpsMixin:
 
     def commit(self, message="CozyStudio Commit"):
         if self.manifest is None or not self.repo:
-            return False
+            return {"ok": False, "errors": ["Repository is not initialized."], "blockers": []}
         try:
-            self._check(interactive=True)
-            if self.last_capture_issues:
-                print("[BpyGit] Commit blocked by capture issues:")
-                for issue in self.last_capture_issues:
-                    print(" -", issue.get("reason"))
-                return False
-            self._ensure_state()
+            preflight = self.snapshot_preflight()
+            if not preflight.get("ok"):
+                print("[BpyGit] Commit blocked by preflight:")
+                for blocker in preflight.get("blockers", []):
+                    print(" -", blocker)
+                return preflight
 
-            integrity = self.validate_manifest_integrity()
-            self.last_integrity_report = integrity
-            if not integrity.get("ok"):
-                print("[BpyGit] Commit blocked by manifest integrity errors:")
-                for err in integrity.get("errors", []):
-                    print(" -", err)
-                return False
-
-            conflicts = self.manifest.get("conflicts") if isinstance(self.manifest, dict) else None
-            if conflicts:
-                print("[BpyGit] Commit blocked: unresolved conflicts present.")
-                return False
-
-            entries = (self.state or {}).get("entries", {})
-            groups = (self.state or {}).get("groups", {})
-
-            staged_paths = {
-                path
-                for (path, stage) in self.repo.index.entries.keys()
-                if stage == 0
-            }
-            group_stage_paths = self._group_stage_paths(staged_paths, entries, groups)
-            if group_stage_paths:
-                self.stage(changes=group_stage_paths)
+            if preflight.get("group_stage_paths"):
+                self.stage(changes=preflight["group_stage_paths"])
 
             if self.manifest is not None:
                 rebuilt_blocks = {}
@@ -154,11 +190,19 @@ class OpsMixin:
             self.repo.index.commit(message)
             self._update_diffs()
             redraw("COZYSTUDIO_PT_log")
-            return True
+            return {
+                "ok": True,
+                "errors": [],
+                "warnings": [],
+                "blockers": [],
+                "staged_count": preflight.get("staged_count", 0),
+                "commit_hash": self.repo.head.commit.hexsha if self.repo.head.is_valid() else None,
+                "message": message,
+            }
         except Exception as e:
             print(f"[BpyGit] Commit failed: {e}")
             print(traceback.format_exc())
-            return False
+            return {"ok": False, "errors": [str(e)], "blockers": []}
         finally:
             self._update_diffs()
 

@@ -89,15 +89,14 @@ class COZYSTUDIO_OT_CreateSnapshot(_CozyOperatorMixin, bpy.types.Operator):
             self.report({"WARNING"}, "Snapshot message cannot be empty")
             return {"CANCELLED"}
 
-        ok = state.git_instance.commit(message=message)
-        if not ok:
-            capture_issues = getattr(state.git_instance, "last_capture_issues", None) or []
-            if capture_issues and capture_issues[0].get("reason"):
-                self.report({"ERROR"}, capture_issues[0]["reason"])
-                return {"CANCELLED"}
-            report = getattr(state.git_instance, "last_integrity_report", None)
-            if report and report.get("errors"):
-                self.report({"ERROR"}, report["errors"][0])
+        result = state.git_instance.commit(message=message)
+        if not result.get("ok"):
+            blockers = result.get("blockers") or []
+            errors = result.get("errors") or []
+            if blockers:
+                self.report({"ERROR"}, blockers[0])
+            elif errors:
+                self.report({"ERROR"}, errors[0])
             else:
                 self.report({"ERROR"}, "Snapshot failed")
             return {"CANCELLED"}

@@ -57,5 +57,15 @@ def test_new_file_save_init_commit_flow():
             manifest = json.load(handle)
         assert manifest.get("blocks")
 
-        git_inst.commit(message="Initial Commit")
+        entry_ids = list((git_inst.state or {}).get("entries", {}).keys())
+        assert entry_ids
+        group_id = (
+            git_inst.state.get("entries", {}).get(entry_ids[0], {}).get("group_id")
+            or entry_ids[0]
+        )
+        result = bpy.ops.cozystudio.add_group("EXEC_DEFAULT", group_id=group_id)
+        assert "FINISHED" in result, f"add_group returned {result}"
+
+        result = git_inst.commit(message="Initial Commit")
+        assert result.get("ok"), f"commit returned {result}"
         assert git_inst.repo.head.is_valid()

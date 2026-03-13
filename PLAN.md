@@ -65,10 +65,10 @@ Core product rules:
 
 ## Phase 7 - Snapshot Flow Hardening
 
-- [ ] Add structured preflight checks for snapshot actions
-- [ ] Keep snapshot blocking on integrity errors and unresolved conflicts
-- [ ] Return structured backend results for UI feedback instead of bool-only outcomes
-- [ ] Preserve grouped staging behavior for related datablocks
+- [x] Add structured preflight checks for snapshot actions
+- [x] Keep snapshot blocking on integrity errors and unresolved conflicts
+- [x] Return structured backend results for UI feedback instead of bool-only outcomes
+- [x] Preserve grouped staging behavior for related datablocks
 
 ## Phase 8 - History Timeline
 

@@ -435,3 +435,20 @@ def test_product_language_snapshot_restore_and_branch_switch_operators():
 
     result = bpy.ops.cozystudio.run_diagnostics("EXEC_DEFAULT")
     assert "FINISHED" in result
+
+
+@pytest.mark.order(15)
+def test_snapshot_preflight_returns_structured_blockers():
+    ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
+    git_inst = init_git_repo_for_test(ui_mod)
+
+    result = git_inst.snapshot_preflight()
+
+    assert "ok" in result
+    assert "can_commit" in result
+    if result["can_commit"]:
+        assert result["staged_count"] > 0
+    else:
+        assert any(
+            "No staged changes" in blocker for blocker in result.get("blockers", [])
+        )
