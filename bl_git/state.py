@@ -65,6 +65,7 @@ class StateMixin:
                 "has_conflicts": False,
                 "items": [],
                 "count": 0,
+                "operation": None,
             },
             "integrity": {
                 "ok": True,
@@ -378,28 +379,13 @@ class StateMixin:
                 "warnings": list(integrity.get("warnings", [])),
             }
 
-        manifest_conflicts = None
-        if isinstance(self.manifest, dict):
-            manifest_conflicts = self.manifest.get("conflicts")
-        if isinstance(manifest_conflicts, dict):
-            ui_state["conflicts"]["items"] = [
-                {"uuid": uuid, "reason": reason}
-                for uuid, reason in sorted(manifest_conflicts.items())
-            ]
-        elif isinstance(manifest_conflicts, list):
-            items = []
-            for item in manifest_conflicts:
-                if isinstance(item, dict):
-                    items.append(dict(item))
-                else:
-                    items.append({"uuid": None, "reason": str(item)})
-            ui_state["conflicts"]["items"] = items
-        elif manifest_conflicts:
-            ui_state["conflicts"]["items"] = [
-                {"uuid": None, "reason": str(manifest_conflicts)}
-            ]
+        ui_state["conflicts"]["items"] = self._manifest_conflict_items()
         ui_state["conflicts"]["has_conflicts"] = bool(ui_state["conflicts"]["items"])
         ui_state["conflicts"]["count"] = len(ui_state["conflicts"]["items"])
+        if ui_state["conflicts"]["items"]:
+            ui_state["conflicts"]["operation"] = ui_state["conflicts"]["items"][0].get(
+                "operation"
+            )
 
         if self.repo is not None:
             head_hash = None

@@ -12,22 +12,22 @@ from .constants import (
     MANIFEST_VERSION,
     MANIFEST_VERSION_KEY,
 )
-from .json_io import serialize_json_data
+from .json_io import normalize_json_data, serialize_json_data
 
 
 class MergeMixin:
     def merge(self, ref, strategy="manual"):
         if not self.repo or not self.initiated:
-            return {"ok": False, "errors": ["Repository not initialized."], "conflicts": {}}
+            return {"ok": False, "errors": ["Repository not initialized."], "conflicts": []}
         if self._managed_carryover():
             return {
                 "ok": False,
                 "errors": ["Parked Cozy changes already exist. Restore them before continuing."],
-                "conflicts": {},
+                "conflicts": [],
             }
         parked = self._park_cozy_changes("merge", ref)
         if not parked.get("ok"):
-            return {"ok": False, "errors": [parked["error"]], "conflicts": {}}
+            return {"ok": False, "errors": [parked["error"]], "conflicts": []}
 
         ours_ref = self.repo.head.commit.hexsha
         try:
@@ -48,21 +48,21 @@ class MergeMixin:
 
     def rebase(self, onto_ref, strategy="manual"):
         if not self.repo or not self.initiated:
-            return {"ok": False, "errors": ["Repository not initialized."], "conflicts": {}}
+            return {"ok": False, "errors": ["Repository not initialized."], "conflicts": []}
         if self._managed_carryover():
             return {
                 "ok": False,
                 "errors": ["Parked Cozy changes already exist. Restore them before continuing."],
-                "conflicts": {},
+                "conflicts": [],
             }
         parked = self._park_cozy_changes("rebase", onto_ref)
         if not parked.get("ok"):
-            return {"ok": False, "errors": [parked["error"]], "conflicts": {}}
+            return {"ok": False, "errors": [parked["error"]], "conflicts": []}
 
         head_ref = self.repo.head.commit.hexsha
         commits = list(self.repo.iter_commits(f"{onto_ref}..{head_ref}", reverse=True))
         if not commits:
-            result = {"ok": True, "errors": [], "conflicts": {}}
+            result = {"ok": True, "errors": [], "conflicts": []}
             if parked.get("stashed"):
                 carryover_result = self.reapply_parked_changes()
                 result["carryover"] = carryover_result
@@ -73,7 +73,7 @@ class MergeMixin:
         try:
             self.restore_ref(onto_ref, park_changes=False)
         except Exception as e:
-            return {"ok": False, "errors": [f"Failed to checkout {onto_ref}: {e}"], "conflicts": {}}
+            return {"ok": False, "errors": [f"Failed to checkout {onto_ref}: {e}"], "conflicts": []}
 
         for commit in commits:
             parent = commit.parents[0].hexsha if commit.parents else None
@@ -84,7 +84,7 @@ class MergeMixin:
                     result["carryover"] = {"ok": False, "parked": True}
                 return result
 
-        result = {"ok": True, "errors": [], "conflicts": {}}
+        result = {"ok": True, "errors": [], "conflicts": []}
         if parked.get("stashed"):
             carryover_result = self.reapply_parked_changes()
             result["carryover"] = carryover_result
@@ -93,7 +93,7 @@ class MergeMixin:
         return result
 
     def _merge_refs(self, base_ref, ours_ref, theirs_ref, strategy="manual"):
-        conflicts = {}
+        conflicts = []
         errors = []
 
         base_manifest = self._load_manifest_at(base_ref) if base_ref else self._empty_manifest()
@@ -121,7 +121,31 @@ class MergeMixin:
                 result = self._merge_block_data(base_data, ours_data, theirs_data, tier, strategy)
 
                 if result["conflict"]:
-                    conflicts[uuid] = result["reason"]
+                    conflicts.append(
+                        {
+                            "uuid": uuid,
+                            "reason": result["reason"],
+                            "label": (
+                                (ours_data or {}).get("name")
+                                or (theirs_data or {}).get("name")
+                                or uuid
+                            ),
+                            "datablock_type": (
+                                (ours_blocks.get(uuid) or {}).get("type")
+                                or (theirs_blocks.get(uuid) or {}).get("type")
+                            ),
+                            "operation": "rebase" if ours_ref == "WORKING_TREE" else "merge",
+                            "base_ref": self._conflict_ref_value(base_ref),
+                            "ours_ref": self._conflict_ref_value(ours_ref),
+                            "theirs_ref": self._conflict_ref_value(theirs_ref),
+                            "ours_entry": normalize_json_data(ours_blocks.get(uuid)),
+                            "theirs_entry": normalize_json_data(theirs_blocks.get(uuid)),
+                            "ours_data": (
+                                normalize_json_data(ours_data) if ours_ref == "WORKING_TREE" else None
+                            ),
+                            "theirs_data": None,
+                        }
+                    )
                     if strategy == "ours":
                         merged = ours_data
                     elif strategy == "theirs":
@@ -137,8 +161,9 @@ class MergeMixin:
             self._write_merged_blocks(merged_blocks)
             merged_manifest = self._merge_manifest_metadata(ours_manifest, theirs_manifest, merged_blocks)
 
-            if conflicts:
-                merged_manifest["conflicts"] = conflicts
+            recorded_conflicts = conflicts if strategy == "manual" else []
+            if recorded_conflicts:
+                merged_manifest["conflicts"] = recorded_conflicts
             elif "conflicts" in merged_manifest:
                 del merged_manifest["conflicts"]
 
@@ -156,8 +181,72 @@ class MergeMixin:
         finally:
             self.suspend_checks = False
 
-        ok = not errors and (not conflicts or strategy in ("ours", "theirs"))
-        return {"ok": ok, "errors": errors, "conflicts": conflicts}
+        returned_conflicts = conflicts if strategy == "manual" else []
+        ok = not errors and (not returned_conflicts or strategy in ("ours", "theirs"))
+        return {"ok": ok, "errors": errors, "conflicts": returned_conflicts}
+
+    def _conflict_ref_value(self, ref):
+        if ref in {None, "WORKING_TREE"}:
+            return ref
+        try:
+            return self.repo.commit(ref).hexsha
+        except Exception:
+            return ref
+
+    def _conflict_side_data(self, conflict, side):
+        data_key = f"{side}_data"
+        if conflict.get(data_key) is not None:
+            return conflict.get(data_key)
+        return self._load_block_data(conflict.get(f"{side}_ref"), conflict.get("uuid"))
+
+    def resolve_conflict(self, conflict_uuid, resolution="manual"):
+        if not isinstance(self.manifest, dict):
+            return {"ok": False, "error": "No manifest is loaded."}
+
+        conflicts = self._manifest_conflict_items()
+        if not conflicts:
+            return {"ok": False, "error": "No conflicts to resolve."}
+
+        if not conflict_uuid:
+            return {"ok": False, "error": "A conflict UUID is required."}
+
+        conflict = None
+        remaining = []
+        for item in conflicts:
+            if item.get("uuid") == conflict_uuid and conflict is None:
+                conflict = item
+                continue
+            remaining.append(item)
+
+        if conflict is None:
+            return {"ok": False, "error": "Conflict entry was not found."}
+
+        if resolution in {"ours", "theirs"}:
+            entry = conflict.get(f"{resolution}_entry")
+            data = self._conflict_side_data(conflict, resolution)
+            manifest_blocks = self.manifest.get(MANIFEST_BLOCKS_KEY, {})
+            if entry:
+                manifest_blocks[conflict_uuid] = dict(entry)
+            elif conflict_uuid in manifest_blocks:
+                del manifest_blocks[conflict_uuid]
+
+            if data is None:
+                self._delete_block_file(conflict_uuid)
+            else:
+                self._write_block_file(conflict_uuid, serialize_json_data(data))
+
+            self.manifest[MANIFEST_BLOCKS_KEY] = manifest_blocks
+
+        self._set_manifest_conflicts(remaining)
+        self.manifest.write()
+        self.restore_ref(park_changes=False)
+        self.refresh_ui_state()
+        return {
+            "ok": True,
+            "resolution": resolution,
+            "remaining": len(remaining),
+            "conflict": conflict,
+        }
 
     def _merge_tier_for_uuid(self, uuid, ours_blocks, theirs_blocks):
         ours_entry = ours_blocks.get(uuid, {})

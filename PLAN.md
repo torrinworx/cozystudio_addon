@@ -42,16 +42,11 @@ Current direction:
 
 ## 4. Conflict Handling
 
-- [ ] Upgrade manifest conflict entries into structured UI-friendly records
-- [ ] Show blocking conflict state in the main workflow when present
-- [ ] Keep a dedicated `Conflicts` panel only for active resolution work
-- [ ] Add backend helpers for per-conflict resolution and merge finalization
-
-## 5. Diagnostics and Trust Signals
-
-- [ ] Show integrity problems, capture issues, missing blocks, and last-operation failures clearly
-- [ ] Persist important warnings until they are resolved
-- [ ] Avoid relying on console output as the only user-visible error signal
+- [x] Upgrade manifest conflict entries into structured UI-friendly records
+- [x] Show blocking conflict state in the main workflow when present
+- [x] Keep a dedicated `Conflicts` panel only for active resolution work
+- [x] Add per-conflict actions for `Checkout Mine`, `Checkout Theirs`, and manual resolution
+- [x] Add backend helpers for per-conflict resolution and conflict finalization refresh
 
 ## 6. Automatic Carryover / Stash Behavior
 
@@ -66,7 +61,7 @@ Current direction:
 - [x] Add coverage for commit checkout and branch checkout reconstruction
 - [x] Add coverage for commit preflight blockers
 - [x] Add coverage for merge/rebase UI flows
-- [ ] Add coverage for structured conflict generation and resolution
+- [x] Add coverage for structured conflict generation and resolution
 - [x] Add coverage for stash/carryover behavior
 
 ## Done When

@@ -178,7 +178,10 @@ class COZYSTUDIO_PT_ChangesPanel(bpy.types.Panel):
 
         if conflicts_ui.get("has_conflicts"):
             box = layout.box()
-            box.label(text="Unresolved conflicts block commits.", icon="ERROR")
+            count = conflicts_ui.get("count", 0)
+            operation = conflicts_ui.get("operation") or "merge"
+            box.label(text=f"{count} unresolved conflicts block commits.", icon="ERROR")
+            box.label(text=f"Finish the {operation} by choosing mine, theirs, or manual resolve.")
 
         if commit_ui.get("blockers"):
             blockers = layout.box()
@@ -379,12 +382,39 @@ class COZYSTUDIO_PT_ConflictsPanel(bpy.types.Panel):
         conflicts_ui = _git_ui().get("conflicts", {})
 
         layout.label(text=f"{conflicts_ui.get('count', 0)} unresolved conflicts", icon="ERROR")
-        layout.operator("cozystudio.resolve_conflict", text="Mark All Resolved", icon="CHECKMARK")
         for item in conflicts_ui.get("items", []):
             box = layout.box()
-            box.label(text=item.get("reason") or "Conflict", icon="ERROR")
+            title = item.get("label") or item.get("uuid") or "Conflict"
+            if item.get("datablock_type"):
+                title = f"{title} ({item['datablock_type']})"
+            box.label(text=title, icon="ERROR")
+            box.label(text=item.get("reason") or "Conflict")
+            if item.get("operation"):
+                box.label(text=f"Operation: {item['operation']}")
             if item.get("uuid"):
-                op = box.operator("cozystudio.resolve_conflict", text="Mark Resolved", icon="CHECKMARK")
+                row = box.row(align=True)
+                op = row.operator(
+                    "cozystudio.resolve_conflict_version",
+                    text="Checkout Mine",
+                    icon="LOOP_BACK",
+                )
+                op.conflict_uuid = item["uuid"]
+                op.resolution = "ours"
+                op = row.operator(
+                    "cozystudio.resolve_conflict_version",
+                    text="Checkout Theirs",
+                    icon="IMPORT",
+                )
+                op.conflict_uuid = item["uuid"]
+                op.resolution = "theirs"
+                row = box.row(align=True)
+                op = row.operator("cozystudio.select_block", text="Select Block", icon="RESTRICT_SELECT_OFF")
+                op.uuid = item["uuid"]
+                op = row.operator(
+                    "cozystudio.resolve_conflict",
+                    text="Mark Manually Resolved",
+                    icon="CHECKMARK",
+                )
                 op.conflict_uuid = item["uuid"]
 
 

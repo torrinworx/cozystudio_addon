@@ -365,7 +365,19 @@ def test_ui_state_payload_tracks_repo_branch_conflicts_and_counts():
     assert ui_state["history"]["items"]
     assert ui_state["history"]["items"][0]["commit_hash"]
 
-    git_inst.manifest["conflicts"] = {uuid: "Synthetic test conflict"}
+    git_inst.manifest["conflicts"] = [
+        {
+            "uuid": uuid,
+            "reason": "Synthetic test conflict",
+            "label": "CozyUiStateObject",
+            "datablock_type": "objects",
+            "operation": "merge",
+            "ours_ref": commit1,
+            "theirs_ref": commit1,
+            "ours_entry": git_inst.manifest.get("blocks", {}).get(uuid),
+            "theirs_entry": git_inst.manifest.get("blocks", {}).get(uuid),
+        }
+    ]
     git_inst.manifest.write()
     git_inst.last_integrity_report = git_inst.validate_manifest_integrity()
     git_inst.refresh_ui_state()
@@ -373,6 +385,8 @@ def test_ui_state_payload_tracks_repo_branch_conflicts_and_counts():
     ui_state = git_inst.ui_state
     assert ui_state["conflicts"]["has_conflicts"]
     assert ui_state["conflicts"]["items"][0]["uuid"] == uuid
+    assert ui_state["conflicts"]["items"][0]["label"] == "CozyUiStateObject"
+    assert ui_state["conflicts"]["operation"] == "merge"
     assert not ui_state["integrity"]["ok"]
     assert "Unresolved conflicts present in manifest." in ui_state["integrity"]["errors"]
 

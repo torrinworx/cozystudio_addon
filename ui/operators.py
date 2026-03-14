@@ -529,27 +529,65 @@ class COZYSTUDIO_OT_ResolveConflict(_CozyOperatorMixin, bpy.types.Operator):
         if not isinstance(manifest, dict):
             self.report({"ERROR"}, "No manifest is loaded")
             return {"CANCELLED"}
-        conflicts = manifest.get("conflicts")
+
+        if self.conflict_uuid:
+            result = state.git_instance.resolve_conflict(self.conflict_uuid, resolution="manual")
+            if not result.get("ok"):
+                self.report({"ERROR"}, result.get("error", "Conflict entry was not found"))
+                return {"CANCELLED"}
+            self._refresh_and_validate()
+            self.report({"INFO"}, "Conflict marked manually resolved")
+            return {"FINISHED"}
+
+        conflicts = state.git_instance._manifest_conflict_items()
         if not conflicts:
             self.report({"WARNING"}, "No conflicts to resolve")
             return {"CANCELLED"}
 
-        if self.conflict_uuid:
-            if isinstance(conflicts, dict) and self.conflict_uuid in conflicts:
-                del conflicts[self.conflict_uuid]
-                if not conflicts:
-                    del manifest["conflicts"]
-                else:
-                    manifest["conflicts"] = conflicts
-            else:
-                self.report({"WARNING"}, "Conflict entry was not found")
-                return {"CANCELLED"}
-        else:
-            del manifest["conflicts"]
-
+        state.git_instance._set_manifest_conflicts([])
         manifest.write()
         self._refresh_and_validate()
-        self.report({"INFO"}, "Conflict marker cleared")
+        self.report({"INFO"}, "All conflict markers cleared")
+        return {"FINISHED"}
+
+
+class COZYSTUDIO_OT_ResolveConflictVersion(_CozyOperatorMixin, bpy.types.Operator):
+    bl_idname = "cozystudio.resolve_conflict_version"
+    bl_label = "Apply Conflict Version"
+    bl_description = "Resolve a CozyStudio conflict by checking out your side or the incoming side"
+
+    conflict_uuid: bpy.props.StringProperty(
+        name="Conflict UUID",
+        description="Conflict entry to resolve",
+        default="",
+    )
+    resolution: bpy.props.EnumProperty(
+        name="Resolution",
+        description="Conflict version to apply",
+        items=[
+            ("ours", "Checkout Mine", "Keep the current branch or replayed version"),
+            ("theirs", "Checkout Theirs", "Take the incoming version for this conflict"),
+        ],
+        default="ours",
+    )
+
+    def execute(self, context):
+        error = self._require_git()
+        if error:
+            self.report({"ERROR"}, error)
+            return {"CANCELLED"}
+        if not self.conflict_uuid:
+            self.report({"ERROR"}, "Conflict UUID is required")
+            return {"CANCELLED"}
+
+        result = state.git_instance.resolve_conflict(self.conflict_uuid, resolution=self.resolution)
+        if not result.get("ok"):
+            self.report({"ERROR"}, result.get("error", "Failed to resolve conflict"))
+            return {"CANCELLED"}
+
+        self._refresh_and_validate()
+        label = "mine" if self.resolution == "ours" else "theirs"
+        self.report({"INFO"}, f"Checked out {label} for {self.conflict_uuid}")
         return {"FINISHED"}
 
 

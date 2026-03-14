@@ -14,6 +14,53 @@ from .constants import (
 
 
 class ManifestMixin:
+    def _manifest_conflict_items(self):
+        if not isinstance(self.manifest, dict):
+            return []
+
+        conflicts = self.manifest.get("conflicts")
+        if not conflicts:
+            return []
+
+        if isinstance(conflicts, dict):
+            return [
+                {"uuid": uuid, "reason": str(reason)}
+                for uuid, reason in sorted(conflicts.items())
+            ]
+
+        if isinstance(conflicts, list):
+            items = []
+            for item in conflicts:
+                if isinstance(item, dict):
+                    normalized = dict(item)
+                    normalized["uuid"] = normalized.get("uuid") or None
+                    normalized["reason"] = str(normalized.get("reason") or "Conflict")
+                    items.append(normalized)
+                else:
+                    items.append({"uuid": None, "reason": str(item)})
+            return items
+
+        return [{"uuid": None, "reason": str(conflicts)}]
+
+    def _set_manifest_conflicts(self, items):
+        if self.manifest is None:
+            return
+
+        normalized = []
+        for item in items or []:
+            if not isinstance(item, dict):
+                normalized.append({"uuid": None, "reason": str(item)})
+                continue
+            normalized_item = dict(item)
+            normalized_item["uuid"] = normalized_item.get("uuid") or None
+            normalized_item["reason"] = str(normalized_item.get("reason") or "Conflict")
+            normalized.append(normalized_item)
+
+        if normalized:
+            self.manifest["conflicts"] = normalized
+        elif "conflicts" in self.manifest:
+            del self.manifest["conflicts"]
+
     def _manifest(self, changes: list[str]):
         changes = [c for c in changes if c.startswith(".cozystudio/blocks/")]
         if not changes:

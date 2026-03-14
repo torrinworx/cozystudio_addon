@@ -14,6 +14,7 @@ expected_ops = [
     "cozystudio.merge",
     "cozystudio.rebase",
     "cozystudio.resolve_conflict",
+    "cozystudio.resolve_conflict_version",
     "cozystudio.run_diagnostics",
     "cozystudio.select_block",
     "cozystudio.add_file",
