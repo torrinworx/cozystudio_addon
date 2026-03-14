@@ -75,14 +75,14 @@ class BpyGit(
             return
 
         git_dir = self.path / ".git"
-        if not git_dir.exists():
+        if not git_dir.exists() or not git_dir.is_dir():
             self.repo = None
             self.initiated = False
             self.refresh_ui_state()
             return
 
         try:
-            self.repo = Repo(self.path, search_parent_directories=False)
+            self.repo = Repo(git_dir)
             if self.repo.bare:
                 self.repo = None
             elif Path(self.repo.working_tree_dir).resolve() != self.path:
