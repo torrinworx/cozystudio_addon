@@ -20,7 +20,7 @@ This runs alongside Blender's autosave without interfering with it, so you can k
 - Check out older commits or switch branches from the UI.
 - Merge and rebase with conflict resolution tools.
 
-# Quick Start (In Blender)
+# Quick Start
 1. Save your `.blend` file to a folder that will become the project root.
 2. Open the **Cozy Studio** panel in the 3D View sidebar.
 3. Click **Init Repository** to initialize a Git/Cozy Studio repo.
