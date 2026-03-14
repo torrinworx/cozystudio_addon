@@ -5,8 +5,6 @@ from pathlib import Path
 
 import bpy
 
-from cozystudio_addon.bl_git.tracking import Track
-
 
 def parse_requirements(path: Path):
     if not path.exists():
@@ -140,6 +138,8 @@ def create_test_object(name="CozyTestObject"):
 
 
 def ensure_tracking_assignments(git_inst):
+    from cozystudio_addon.bl_git.tracking import Track
+
     Track(git_inst.bpy_protocol)._run_assign_loop()
 
 

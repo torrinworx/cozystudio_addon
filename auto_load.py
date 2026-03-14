@@ -35,6 +35,16 @@ def register():
 
     for cls in ordered_classes:
         try:
+            existing_cls = getattr(bpy.types, cls.__name__, None)
+            if existing_cls is not None and existing_cls is not cls:
+                if getattr(existing_cls, "bl_rna", None) is not None:
+                    try:
+                        bpy.utils.unregister_class(existing_cls)
+                    except Exception:
+                        pass
+            if getattr(bpy.types, cls.__name__, None) is cls:
+                registered_classes.append(cls)
+                continue
             bpy.utils.register_class(cls)
             registered_classes.append(cls)
         except Exception as e:
@@ -54,7 +64,19 @@ def unregister():
 
     for cls in reversed(registered_classes):
         try:
-            bpy.utils.unregister_class(cls)
+            existing_cls = getattr(bpy.types, cls.__name__, None)
+            if existing_cls is None:
+                continue
+            if existing_cls is not cls:
+                if getattr(existing_cls, "bl_rna", None) is not None:
+                    try:
+                        bpy.utils.unregister_class(existing_cls)
+                    except Exception:
+                        pass
+                continue
+            if getattr(existing_cls, "bl_rna", None) is None:
+                continue
+            bpy.utils.unregister_class(existing_cls)
         except Exception as e:
             print("[CozyStudio] Error unregistering class:", cls, e)
     registered_classes = []
@@ -90,6 +112,8 @@ def iter_submodules(path, package_name):
 
 def iter_submodule_names(path, root=""):
     for _, module_name, is_package in pkgutil.iter_modules([str(path)]):
+        if module_name == "tests":
+            continue
         if is_package:
             sub_path = path / module_name
             sub_root = root + module_name + "."

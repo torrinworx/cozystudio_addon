@@ -46,6 +46,7 @@ def main():
 
     cmd = [
         str(blender_path),
+        "--factory-startup",
         "--background",
         "--python",
         str(runner),

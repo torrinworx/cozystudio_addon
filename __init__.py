@@ -196,8 +196,25 @@ def register():
     _core_classes_registered = False
 
     try:
-        bpy.utils.register_class(COZYSTUDIO_OT_install_deps)
-        bpy.utils.register_class(CozyStudioPreferences)
+        existing_install = getattr(bpy.types, COZYSTUDIO_OT_install_deps.__name__, None)
+        if existing_install is not None and existing_install is not COZYSTUDIO_OT_install_deps:
+            if getattr(existing_install, "bl_rna", None) is not None:
+                try:
+                    bpy.utils.unregister_class(existing_install)
+                except Exception:
+                    pass
+        if getattr(bpy.types, COZYSTUDIO_OT_install_deps.__name__, None) is not COZYSTUDIO_OT_install_deps:
+            bpy.utils.register_class(COZYSTUDIO_OT_install_deps)
+
+        existing_prefs = getattr(bpy.types, CozyStudioPreferences.__name__, None)
+        if existing_prefs is not None and existing_prefs is not CozyStudioPreferences:
+            if getattr(existing_prefs, "bl_rna", None) is not None:
+                try:
+                    bpy.utils.unregister_class(existing_prefs)
+                except Exception:
+                    pass
+        if getattr(bpy.types, CozyStudioPreferences.__name__, None) is not CozyStudioPreferences:
+            bpy.utils.register_class(CozyStudioPreferences)
         _core_classes_registered = True
     except Exception as e:
         print("[CozyStudio] Error registering core classes:", e)
@@ -229,11 +246,15 @@ def unregister():
     global _core_classes_registered
     if _core_classes_registered:
         try:
-            bpy.utils.unregister_class(CozyStudioPreferences)
+            existing_prefs = getattr(bpy.types, CozyStudioPreferences.__name__, None)
+            if existing_prefs is not None and getattr(existing_prefs, "bl_rna", None) is not None:
+                bpy.utils.unregister_class(existing_prefs)
         except Exception as e:
             print("[CozyStudio] Error unregistering preferences:", e)
         try:
-            bpy.utils.unregister_class(COZYSTUDIO_OT_install_deps)
+            existing_install = getattr(bpy.types, COZYSTUDIO_OT_install_deps.__name__, None)
+            if existing_install is not None and getattr(existing_install, "bl_rna", None) is not None:
+                bpy.utils.unregister_class(existing_install)
         except Exception as e:
             print("[CozyStudio] Error unregistering install operator:", e)
     _core_classes_registered = False
