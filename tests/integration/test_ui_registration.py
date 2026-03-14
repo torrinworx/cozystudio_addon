@@ -30,7 +30,6 @@ expected_panels = [
     "COZYSTUDIO_PT_history",
     "COZYSTUDIO_PT_branches",
     "COZYSTUDIO_PT_conflicts",
-    "COZYSTUDIO_PT_diagnostics",
 ]
 
 

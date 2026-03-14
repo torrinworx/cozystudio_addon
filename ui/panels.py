@@ -262,40 +262,7 @@ class COZYSTUDIO_PT_HistoryPanel(bpy.types.Panel):
             rows=6,
         )
 
-        selected_index = wm.cozystudio_commit_index
-        if 0 <= selected_index < len(history_items):
-            selected = history_items[selected_index]
-            detail = layout.box()
-            detail.label(text=selected.get("summary", "Commit"), icon="TIME")
-            detail.label(text=selected.get("change_summary", ""))
-            detail.label(
-                text=(
-                    f"Added {selected.get('added_count', 0)}, "
-                    f"Updated {selected.get('modified_count', 0)}, "
-                    f"Removed {selected.get('removed_count', 0)}"
-                )
-            )
-            detail.operator(
-                "cozystudio.checkout_commit",
-                text="Checkout Commit",
-                icon="FILE_REFRESH",
-            ).commit_hash = selected.get("commit_hash", "")
 
-            if selected.get("changes"):
-                detail.separator()
-                detail.label(text="Changed Assets", icon="OUTLINER_COLLECTION")
-                for change in selected.get("changes", []):
-                    change_type = change.get("change")
-                    if change_type == "added":
-                        icon = "ADD"
-                    elif change_type == "removed":
-                        icon = "REMOVE"
-                    else:
-                        icon = "FILE_REFRESH"
-                    detail.label(text=change.get("label", "Change"), icon=icon)
-                remaining = selected.get("total_changes", 0) - len(selected.get("changes", []))
-                if remaining > 0:
-                    detail.label(text=f"...and {remaining} more")
 
 
 class COZYSTUDIO_PT_BranchesPanel(bpy.types.Panel):
@@ -418,47 +385,3 @@ class COZYSTUDIO_PT_ConflictsPanel(bpy.types.Panel):
                 op.conflict_uuid = item["uuid"]
 
 
-class COZYSTUDIO_PT_DiagnosticsPanel(bpy.types.Panel):
-    bl_label = "Diagnostics"
-    bl_idname = "COZYSTUDIO_PT_diagnostics"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "Cozy Studio"
-    bl_order = 5
-
-    @classmethod
-    def poll(cls, context):
-        return _repo_ready(_git_ui())
-
-    def draw(self, context):
-        layout = self.layout
-        git_ui = _git_ui()
-
-        integrity_ui = git_ui.get("integrity", {})
-        capture_ui = git_ui.get("capture", {})
-
-        row = layout.row(align=True)
-        row.label(text="System status", icon="INFO")
-        row.operator("cozystudio.run_diagnostics", text="Refresh", icon="FILE_REFRESH")
-
-        integrity_box = layout.box()
-        integrity_box.label(
-            text="Manifest integrity OK" if integrity_ui.get("ok") else "Manifest integrity issues",
-            icon="CHECKMARK" if integrity_ui.get("ok") else "ERROR",
-        )
-        for error in integrity_ui.get("errors", []):
-            integrity_box.label(text=error)
-        for warning in integrity_ui.get("warnings", []):
-            integrity_box.label(text=warning, icon="INFO")
-
-        capture_box = layout.box()
-        capture_box.label(
-            text=(
-                f"Capture issues: {capture_ui.get('count', 0)}"
-                if capture_ui.get("has_issues")
-                else "Capture path is healthy"
-            ),
-            icon="ERROR" if capture_ui.get("has_issues") else "CHECKMARK",
-        )
-        for issue in capture_ui.get("issues", []):
-            capture_box.label(text=issue.get("reason") or issue.get("status") or "Issue")
