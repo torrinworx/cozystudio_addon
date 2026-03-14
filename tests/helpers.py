@@ -17,6 +17,15 @@ def parse_requirements(path: Path):
     return pkgs
 
 
+def create_fresh_test_blend(target_dir: Path, filename: str = "test.blend"):
+    target_dir.mkdir(parents=True, exist_ok=True)
+    blend_path = target_dir / filename
+    bpy.ops.wm.read_factory_settings(use_empty=False)
+    bpy.ops.wm.save_as_mainfile(filepath=str(blend_path))
+    bpy.ops.wm.open_mainfile(filepath=str(blend_path))
+    return blend_path
+
+
 def wait_for_git_instance(ui_mod, timeout=3.0):
     start = time.time()
     while time.time() - start < timeout:
@@ -39,6 +48,35 @@ def wait_for_install_finished(cozy_mod, timeout=120.0):
         bpy.app.timers.is_registered
         time.sleep(0.2)
     return False
+
+
+def get_working_paths(git_inst):
+    working_paths = {
+        diff.b_path or diff.a_path for diff in git_inst.repo.index.diff(None)
+    }
+    working_paths.update(git_inst.repo.untracked_files)
+    return working_paths
+
+
+def get_dirty_block_paths(git_inst):
+    return {
+        path for path in get_working_paths(git_inst) if path.startswith(".cozystudio/blocks/")
+    }
+
+
+def assert_no_dirty_blocks(git_inst):
+    dirty_blocks = get_dirty_block_paths(git_inst)
+    assert not dirty_blocks, f"Unexpected dirty block files: {sorted(dirty_blocks)}"
+
+
+def assert_manifest_integrity_ok(git_inst):
+    report = git_inst.validate_manifest_integrity()
+    assert report.get("ok"), f"Manifest integrity failed: {report}"
+
+
+def assert_no_parked_changes(git_inst):
+    parked = git_inst._managed_carryover_entries()
+    assert not parked, f"Unexpected parked Cozy changes: {parked}"
 
 
 def enable_addon(addon_name: str):
@@ -112,7 +150,13 @@ def init_git_repo_for_test(ui_mod, timeout=5.0):
         raise RuntimeError(f".cozystudio/blocks directory not found at {blocks_dir}")
 
     try:
-        if git_inst.repo is not None and git_inst.repo.head.is_detached:
+        is_detached = False
+        if git_inst.repo is not None:
+            try:
+                is_detached = git_inst.repo.head.is_detached
+            except Exception:
+                is_detached = False
+        if git_inst.repo is not None and is_detached:
             branch_name = get_repo_branch_name(git_inst.repo)
             if branch_name:
                 git_inst.repo.git.checkout(branch_name)
