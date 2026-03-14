@@ -28,8 +28,10 @@ class _CozyOperatorMixin:
         return report
 
     def _sync_preflight(self):
+        if state.git_instance._managed_carryover():
+            return "Parked Cozy changes already exist. Restore them before continuing."
         dirty_paths = state.git_instance._dirty_paths()
-        if dirty_paths and not state.git_instance._is_merge_safe_dirty(dirty_paths):
+        if state.git_instance._blocking_dirty_paths(dirty_paths):
             return "Working tree has non-Cozy changes. Commit or stash them first."
         return None
 
@@ -307,17 +309,47 @@ class COZYSTUDIO_OT_CheckoutCommit(_CozyOperatorMixin, bpy.types.Operator):
         if error:
             self.report({"ERROR"}, error)
             return {"CANCELLED"}
+        preflight = self._sync_preflight()
+        if preflight:
+            self.report({"ERROR"}, preflight)
+            return {"CANCELLED"}
         if not self.commit_hash.strip():
             self.report({"WARNING"}, "Please enter a commit hash")
             return {"CANCELLED"}
         try:
             state.git_instance.checkout(self.commit_hash)
-            self.report({"INFO"}, f"Checked out commit {self.commit_hash[:8]}")
+            if state.git_instance._managed_carryover():
+                self.report(
+                    {"WARNING"},
+                    f"Checked out commit {self.commit_hash[:8]}; local Cozy changes are parked safely.",
+                )
+            else:
+                self.report({"INFO"}, f"Checked out commit {self.commit_hash[:8]}")
             return {"FINISHED"}
         except Exception as e:
             self.report({"ERROR"}, f"Checkout failed: {e}")
             traceback.print_exc()
             return {"CANCELLED"}
+
+
+class COZYSTUDIO_OT_ReapplyParkedChanges(_CozyOperatorMixin, bpy.types.Operator):
+    bl_idname = "cozystudio.reapply_parked_changes"
+    bl_label = "Restore Parked Changes"
+    bl_description = "Restore Cozy changes that were parked during checkout, merge, or rebase"
+
+    def execute(self, context):
+        error = self._require_git()
+        if error:
+            self.report({"ERROR"}, error)
+            return {"CANCELLED"}
+
+        result = state.git_instance.reapply_parked_changes()
+        if not result.get("ok"):
+            self.report({"ERROR"}, result.get("error", "Failed to restore parked Cozy changes"))
+            return {"CANCELLED"}
+
+        self.report({"INFO"}, "Restored parked Cozy changes")
+        return {"FINISHED"}
 
 
 class COZYSTUDIO_OT_CheckoutBranch(_CozyOperatorMixin, bpy.types.Operator):
@@ -345,7 +377,13 @@ class COZYSTUDIO_OT_CheckoutBranch(_CozyOperatorMixin, bpy.types.Operator):
             return {"CANCELLED"}
         try:
             state.git_instance.switch_branch(self.branch_name)
-            self.report({"INFO"}, f"Checked out branch {self.branch_name}")
+            if state.git_instance._managed_carryover():
+                self.report(
+                    {"WARNING"},
+                    f"Checked out branch {self.branch_name}; local Cozy changes are parked safely.",
+                )
+            else:
+                self.report({"INFO"}, f"Checked out branch {self.branch_name}")
             return {"FINISHED"}
         except Exception as e:
             self.report({"ERROR"}, f"Branch checkout failed: {e}")
@@ -397,7 +435,16 @@ class COZYSTUDIO_OT_Merge(_CozyOperatorMixin, bpy.types.Operator):
                 return {"CANCELLED"}
         if result.get("conflicts"):
             state.git_instance.refresh_ui_state()
-            self.report({"WARNING"}, "Merge stopped for conflict resolution")
+            if result.get("carryover", {}).get("parked"):
+                self.report(
+                    {"WARNING"},
+                    "Merge stopped for conflict resolution; local Cozy changes are parked safely.",
+                )
+            else:
+                self.report({"WARNING"}, "Merge stopped for conflict resolution")
+            return {"FINISHED"}
+        if result.get("warnings"):
+            self.report({"WARNING"}, result["warnings"][0])
             return {"FINISHED"}
         self.report({"INFO"}, f"Merged {self.ref_name}")
         return {"FINISHED"}
@@ -447,7 +494,16 @@ class COZYSTUDIO_OT_Rebase(_CozyOperatorMixin, bpy.types.Operator):
                 return {"CANCELLED"}
         if result.get("conflicts"):
             state.git_instance.refresh_ui_state()
-            self.report({"WARNING"}, "Rebase stopped for conflict resolution")
+            if result.get("carryover", {}).get("parked"):
+                self.report(
+                    {"WARNING"},
+                    "Rebase stopped for conflict resolution; local Cozy changes are parked safely.",
+                )
+            else:
+                self.report({"WARNING"}, "Rebase stopped for conflict resolution")
+            return {"FINISHED"}
+        if result.get("warnings"):
+            self.report({"WARNING"}, result["warnings"][0])
             return {"FINISHED"}
         self.report({"INFO"}, f"Rebased onto {self.ref_name}")
         return {"FINISHED"}

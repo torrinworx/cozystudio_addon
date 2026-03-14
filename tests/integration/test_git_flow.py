@@ -24,6 +24,10 @@ def _find_object_by_uuid(uuid):
     return None
 
 
+def _managed_stash_entries(git_inst):
+    return git_inst._managed_carryover_entries()
+
+
 @pytest.mark.order(5)
 def test_git_flow_stage_commit_checkout():
     ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
@@ -375,6 +379,68 @@ def test_ui_state_payload_tracks_repo_branch_conflicts_and_counts():
     clear_manifest_conflicts(git_inst)
     git_inst.last_integrity_report = git_inst.validate_manifest_integrity()
     git_inst.switch_branch(base_branch)
+
+
+@pytest.mark.order(13)
+def test_checkout_branch_auto_stashes_and_reapplies_cozy_changes():
+    ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
+    git_inst = init_git_repo_for_test(ui_mod)
+    base_branch = get_repo_branch_name(git_inst.repo)
+    assert base_branch
+
+    test_obj = create_test_object(name="CozyCarryoverBranchObject")
+    test_obj.location.x = 0.0
+    ensure_tracking_assignments(git_inst)
+
+    uuid = wait_for_uuid(test_obj)
+    assert uuid
+
+    git_inst._check()
+    group_id = (
+        git_inst.state.get("entries", {}).get(uuid, {}).get("group_id") or uuid
+    )
+    result = bpy.ops.cozystudio.add_group("EXEC_DEFAULT", group_id=group_id)
+    assert "FINISHED" in result
+    result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Carryover base")
+    assert "FINISHED" in result
+
+    git_inst.repo.git.checkout("-b", "feature_carryover_branch")
+    git_inst.repo.git.checkout(base_branch)
+    git_inst.restore_ref(base_branch, park_changes=False)
+
+    test_obj.location.x = 7.0
+    git_inst._check()
+
+    result = bpy.ops.cozystudio.checkout_branch(
+        "EXEC_DEFAULT", branch_name="feature_carryover_branch"
+    )
+    assert "FINISHED" in result, f"checkout_branch returned {result}"
+    assert git_inst.repo.active_branch.name == "feature_carryover_branch"
+    assert not _managed_stash_entries(git_inst)
+
+    restored_obj = _find_object_by_uuid(uuid)
+    assert restored_obj is not None
+    assert abs(restored_obj.location.x - 7.0) < 1e-4
+
+    working_paths = {
+        diff.b_path or diff.a_path
+        for diff in git_inst.repo.index.diff(None)
+    }
+    working_paths.update(git_inst.repo.untracked_files)
+    assert f".cozystudio/blocks/{uuid}.json" in working_paths
+
+    git_inst.repo.git.restore(
+        "--source=HEAD",
+        "--staged",
+        "--worktree",
+        "--",
+        ".cozystudio/manifest.json",
+        ".cozystudio/blocks",
+    )
+    git_inst.restore_ref()
+    git_inst.repo.git.checkout(base_branch)
+    git_inst.restore_ref(base_branch, park_changes=False)
+    git_inst.repo.git.branch("-D", "feature_carryover_branch")
 
 
 @pytest.mark.order(14)

@@ -19,9 +19,15 @@ class MergeMixin:
     def merge(self, ref, strategy="manual"):
         if not self.repo or not self.initiated:
             return {"ok": False, "errors": ["Repository not initialized."], "conflicts": {}}
-        dirty_paths = self._dirty_paths()
-        if dirty_paths and not self._is_merge_safe_dirty(dirty_paths):
-            return {"ok": False, "errors": ["Working tree is dirty."], "conflicts": {}}
+        if self._managed_carryover():
+            return {
+                "ok": False,
+                "errors": ["Parked Cozy changes already exist. Restore them before continuing."],
+                "conflicts": {},
+            }
+        parked = self._park_cozy_changes("merge", ref)
+        if not parked.get("ok"):
+            return {"ok": False, "errors": [parked["error"]], "conflicts": {}}
 
         ours_ref = self.repo.head.commit.hexsha
         try:
@@ -30,22 +36,42 @@ class MergeMixin:
             base_ref = None
 
         result = self._merge_refs(base_ref, ours_ref, ref, strategy=strategy)
+        if parked.get("stashed"):
+            if result.get("ok") and not result.get("conflicts"):
+                carryover_result = self.reapply_parked_changes()
+                result["carryover"] = carryover_result
+                if not carryover_result.get("ok"):
+                    result["warnings"] = [carryover_result["error"]]
+            else:
+                result["carryover"] = {"ok": False, "parked": True}
         return result
 
     def rebase(self, onto_ref, strategy="manual"):
         if not self.repo or not self.initiated:
             return {"ok": False, "errors": ["Repository not initialized."], "conflicts": {}}
-        dirty_paths = self._dirty_paths()
-        if dirty_paths and not self._is_merge_safe_dirty(dirty_paths):
-            return {"ok": False, "errors": ["Working tree is dirty."], "conflicts": {}}
+        if self._managed_carryover():
+            return {
+                "ok": False,
+                "errors": ["Parked Cozy changes already exist. Restore them before continuing."],
+                "conflicts": {},
+            }
+        parked = self._park_cozy_changes("rebase", onto_ref)
+        if not parked.get("ok"):
+            return {"ok": False, "errors": [parked["error"]], "conflicts": {}}
 
         head_ref = self.repo.head.commit.hexsha
         commits = list(self.repo.iter_commits(f"{onto_ref}..{head_ref}", reverse=True))
         if not commits:
-            return {"ok": True, "errors": [], "conflicts": {}}
+            result = {"ok": True, "errors": [], "conflicts": {}}
+            if parked.get("stashed"):
+                carryover_result = self.reapply_parked_changes()
+                result["carryover"] = carryover_result
+                if not carryover_result.get("ok"):
+                    result["warnings"] = [carryover_result["error"]]
+            return result
 
         try:
-            self.restore_ref(onto_ref)
+            self.restore_ref(onto_ref, park_changes=False)
         except Exception as e:
             return {"ok": False, "errors": [f"Failed to checkout {onto_ref}: {e}"], "conflicts": {}}
 
@@ -54,9 +80,17 @@ class MergeMixin:
             result = self._merge_refs(parent, "WORKING_TREE", commit.hexsha, strategy=strategy)
             if not result.get("ok"):
                 result["failed_commit"] = commit.hexsha
+                if parked.get("stashed"):
+                    result["carryover"] = {"ok": False, "parked": True}
                 return result
 
-        return {"ok": True, "errors": [], "conflicts": {}}
+        result = {"ok": True, "errors": [], "conflicts": {}}
+        if parked.get("stashed"):
+            carryover_result = self.reapply_parked_changes()
+            result["carryover"] = carryover_result
+            if not carryover_result.get("ok"):
+                result["warnings"] = [carryover_result["error"]]
+        return result
 
     def _merge_refs(self, base_ref, ours_ref, theirs_ref, strategy="manual"):
         conflicts = {}
@@ -242,20 +276,27 @@ class MergeMixin:
             dirty.add(path)
         return {p for p in dirty if p}
 
-    def _is_merge_safe_dirty(self, dirty_paths):
-        allowed_patterns = [
-            ".cozystudio/blocks/*",
-            ".cozystudio/manifest.json",
-            ".cozystudio/manifest",
-            "*.blend",
-            "*.blend1",
-        ]
-
-        for path in dirty_paths:
-            if any(fnmatch(path, pattern) for pattern in allowed_patterns):
+    def _cozy_dirty_paths(self, dirty_paths):
+        cozy_paths = set()
+        for path in dirty_paths or set():
+            if path in {".cozystudio/manifest", ".cozystudio/manifest.json"}:
+                cozy_paths.add(path)
                 continue
             if path.startswith(".cozystudio/blocks/"):
-                continue
-            return False
+                cozy_paths.add(path)
+        return cozy_paths
 
-        return True
+    def _blocking_dirty_paths(self, dirty_paths):
+        allowed_patterns = ["*.blend", "*.blend1"]
+        cozy_paths = self._cozy_dirty_paths(dirty_paths)
+        blocking = set()
+        for path in dirty_paths or set():
+            if path in cozy_paths:
+                continue
+            if any(fnmatch(path, pattern) for pattern in allowed_patterns):
+                continue
+            blocking.add(path)
+        return blocking
+
+    def _is_merge_safe_dirty(self, dirty_paths):
+        return not self._blocking_dirty_paths(dirty_paths)

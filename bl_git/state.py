@@ -87,6 +87,14 @@ class StateMixin:
                 "issues": [],
                 "count": 0,
             },
+            "carryover": {
+                "has_parked": False,
+                "stash_ref": None,
+                "operation": None,
+                "source": None,
+                "target": None,
+                "error": None,
+            },
         }
 
     @classmethod
@@ -345,6 +353,15 @@ class StateMixin:
         ui_state["repo"]["path"] = str(self.path)
         ui_state["repo"]["has_manifest"] = isinstance(self.manifest, dict)
         ui_state["branch"]["last_branch"] = self.last_branch
+        ui_state["carryover"]["error"] = self.last_carryover_error
+
+        parked = self._managed_carryover()
+        if parked:
+            ui_state["carryover"]["has_parked"] = True
+            ui_state["carryover"]["stash_ref"] = parked.get("stash_ref")
+            ui_state["carryover"]["operation"] = parked.get("operation")
+            ui_state["carryover"]["source"] = parked.get("source")
+            ui_state["carryover"]["target"] = parked.get("target")
 
         capture_issues = [dict(issue) for issue in (self.last_capture_issues or [])]
         ui_state["capture"]["issues"] = capture_issues

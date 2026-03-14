@@ -24,6 +24,10 @@ def _stage_group(git_inst, uuid):
     assert "FINISHED" in result, f"add_group returned {result}"
 
 
+def _managed_stash_entries(git_inst):
+    return git_inst._managed_carryover_entries()
+
+
 @pytest.mark.order(20)
 def test_merge_no_conflict_applies_theirs():
     ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
@@ -54,8 +58,7 @@ def test_merge_no_conflict_applies_theirs():
     assert "FINISHED" in result
 
     git_inst.repo.git.checkout(base_branch)
-    git_inst.checkout(base_commit)
-    git_inst.refresh_all()
+    git_inst.restore_ref(base_branch, park_changes=False)
 
     merge_result = git_inst.merge("feature", strategy="manual")
     assert merge_result.get("ok")
@@ -98,8 +101,7 @@ def test_merge_conflict_marks_manifest():
     assert "FINISHED" in result
 
     git_inst.repo.git.checkout(base_branch)
-    git_inst.checkout(base_commit)
-    git_inst.refresh_all()
+    git_inst.restore_ref(base_branch, park_changes=False)
     obj.location.x = 2.0
     git_inst._check()
     _stage_group(git_inst, uuid)
@@ -153,8 +155,7 @@ def test_rebase_replays_commits():
     assert "FINISHED" in result
 
     git_inst.repo.git.checkout(base_branch)
-    git_inst.checkout(base_commit)
-    git_inst.refresh_all()
+    git_inst.restore_ref(base_branch, park_changes=False)
     git_inst.repo.git.checkout("feature_rebase")
 
     rebase_result = git_inst.rebase(base_branch, strategy="manual")
@@ -198,8 +199,7 @@ def test_merge_and_conflict_operators():
     assert "FINISHED" in result
 
     git_inst.repo.git.checkout(base_branch)
-    git_inst.checkout(base_commit)
-    git_inst.refresh_all()
+    git_inst.restore_ref(base_branch, park_changes=False)
 
     result = bpy.ops.cozystudio.merge(
         "EXEC_DEFAULT", ref_name="feature_operator_merge", strategy="manual"
@@ -218,3 +218,81 @@ def test_merge_and_conflict_operators():
     assert not (git_inst.manifest or {}).get("conflicts")
 
     git_inst.repo.git.branch("-D", "feature_operator_merge")
+
+
+@pytest.mark.order(24)
+def test_merge_parks_cozy_changes_until_restored():
+    ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
+    git_inst = init_git_repo_for_test(ui_mod)
+    clear_manifest_conflicts(git_inst)
+
+    base_branch = get_repo_branch_name(git_inst.repo)
+    assert base_branch
+
+    obj = create_test_object(name="CozyCarryoverMergeObject")
+    obj.location.x = 0.0
+    ensure_tracking_assignments(git_inst)
+    uuid = wait_for_uuid(obj)
+    assert uuid
+    git_inst._check()
+    assert wait_for_block_file(git_inst, uuid)
+
+    _stage_group(git_inst, uuid)
+    result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Carryover merge base")
+    assert "FINISHED" in result
+
+    git_inst.repo.git.checkout("-b", "feature_carryover_merge")
+    obj.location.x = 1.0
+    git_inst._check()
+    _stage_group(git_inst, uuid)
+    result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Feature committed change")
+    assert "FINISHED" in result
+
+    git_inst.repo.git.checkout(base_branch)
+    git_inst.restore_ref(base_branch, park_changes=False)
+    obj.location.x = 2.0
+    git_inst._check()
+    _stage_group(git_inst, uuid)
+    result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Base committed change")
+    assert "FINISHED" in result
+
+    obj.location.x = 3.0
+    git_inst._check()
+
+    merge_result = git_inst.merge("feature_carryover_merge", strategy="manual")
+    assert not merge_result.get("ok")
+    assert uuid in merge_result.get("conflicts", {})
+    assert _managed_stash_entries(git_inst)
+
+    git_inst.refresh_ui_state()
+    ui_state = git_inst.ui_state
+    assert ui_state["carryover"]["has_parked"]
+
+    try:
+        blocked = bpy.ops.cozystudio.checkout_branch("EXEC_DEFAULT", branch_name=base_branch)
+        assert "CANCELLED" in blocked
+    except RuntimeError as exc:
+        assert "Parked Cozy changes" in str(exc)
+
+    clear_manifest_conflicts(git_inst)
+    git_inst.last_integrity_report = git_inst.validate_manifest_integrity()
+    git_inst.refresh_ui_state()
+
+    result = bpy.ops.cozystudio.reapply_parked_changes("EXEC_DEFAULT")
+    assert "FINISHED" in result
+    assert not _managed_stash_entries(git_inst)
+
+    data = git_inst._read(uuid)
+    matrix = data.get("transforms", {}).get("matrix_basis", [])
+    assert matrix and abs(matrix[0][3] - 3.0) < 1e-4
+
+    git_inst.repo.git.restore(
+        "--source=HEAD",
+        "--staged",
+        "--worktree",
+        "--",
+        ".cozystudio/manifest.json",
+        ".cozystudio/blocks",
+    )
+    git_inst.restore_ref()
+    git_inst.repo.git.branch("-D", "feature_carryover_merge")

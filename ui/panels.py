@@ -132,6 +132,7 @@ class COZYSTUDIO_PT_ChangesPanel(bpy.types.Panel):
         changes_ui = git_ui.get("changes", {})
         integrity_ui = git_ui.get("integrity", {})
         conflicts_ui = git_ui.get("conflicts", {})
+        carryover_ui = git_ui.get("carryover", {})
 
         if commit_ui.get("viewing_past"):
             row = layout.row(align=True)
@@ -142,6 +143,28 @@ class COZYSTUDIO_PT_ChangesPanel(bpy.types.Panel):
             if commit_ui.get("return_branch"):
                 op = row.operator("cozystudio.checkout_branch", text="Checkout Branch", icon="LOOP_BACK")
                 op.branch_name = commit_ui["return_branch"]
+
+        if carryover_ui.get("has_parked"):
+            box = layout.box()
+            box.label(text="Parked Cozy changes", icon="INFO")
+            if carryover_ui.get("source") or carryover_ui.get("target"):
+                box.label(
+                    text=(
+                        f"From {carryover_ui.get('source') or 'unknown'} "
+                        f"to {carryover_ui.get('target') or 'unknown'}"
+                    )
+                )
+            if carryover_ui.get("operation"):
+                box.label(text=f"Operation: {carryover_ui['operation']}")
+            if carryover_ui.get("stash_ref"):
+                box.label(text=f"Stored in {carryover_ui['stash_ref']}")
+            if carryover_ui.get("error"):
+                box.label(text=carryover_ui["error"], icon="ERROR")
+            box.operator(
+                "cozystudio.reapply_parked_changes",
+                text="Restore Parked Changes",
+                icon="IMPORT",
+            )
 
         layout.prop(context.window_manager, "cozystudio_commit_message", text="Message")
 
@@ -189,6 +212,7 @@ class COZYSTUDIO_PT_HistoryPanel(bpy.types.Panel):
         git_ui = _git_ui()
 
         repo_ui = git_ui.get("repo", {})
+        carryover_ui = git_ui.get("carryover", {})
         if not repo_ui.get("available"):
             layout.label(text="No repository available.", icon="ERROR")
             return
@@ -206,6 +230,14 @@ class COZYSTUDIO_PT_HistoryPanel(bpy.types.Panel):
 
         commit_ui = git_ui.get("commit", {})
         branch_ui = git_ui.get("branch", {})
+        if carryover_ui.get("has_parked"):
+            box = layout.box()
+            box.label(text="Parked Cozy changes block further checkout operations.", icon="INFO")
+            box.operator(
+                "cozystudio.reapply_parked_changes",
+                text="Restore Parked Changes",
+                icon="IMPORT",
+            )
         if commit_ui.get("viewing_past") and branch_ui.get("head_short_hash"):
             row = layout.row(align=True)
             row.label(text=f"Detached at {branch_ui['head_short_hash']}", icon="TIME")
@@ -281,6 +313,16 @@ class COZYSTUDIO_PT_BranchesPanel(bpy.types.Panel):
 
         branch_ui = git_ui.get("branch", {})
         commit_ui = git_ui.get("commit", {})
+        carryover_ui = git_ui.get("carryover", {})
+
+        if carryover_ui.get("has_parked"):
+            box = layout.box()
+            box.label(text="Parked Cozy changes must be restored first.", icon="INFO")
+            box.operator(
+                "cozystudio.reapply_parked_changes",
+                text="Restore Parked Changes",
+                icon="IMPORT",
+            )
 
         if branch_ui.get("detached"):
             row = layout.row(align=True)

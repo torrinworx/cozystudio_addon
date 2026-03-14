@@ -9,12 +9,151 @@ from .constants import MANIFEST_BLOCKS_KEY
 
 class CheckoutMixin:
     def checkout(self, commit):
-        self.restore_ref(commit, detach=True)
+        self.restore_ref(commit, detach=True, operation="checkout_commit")
 
     def switch_branch(self, branch_name):
-        self.restore_ref(branch_name)
+        self.restore_ref(branch_name, operation="checkout_branch")
 
-    def restore_ref(self, ref=None, detach=False):
+    def _current_ref_label(self):
+        if not self.repo:
+            return None
+        try:
+            if not self.repo.head.is_detached:
+                return self.repo.active_branch.name
+        except Exception:
+            pass
+        try:
+            return self.repo.head.commit.hexsha[:8]
+        except Exception:
+            return None
+
+    def _managed_carryover_entries(self):
+        if not self.repo:
+            return []
+        try:
+            lines = self.repo.git.stash("list").splitlines()
+        except Exception:
+            return []
+
+        entries = []
+        prefix = f"{self.carryover_message_prefix}|"
+        for line in lines:
+            if prefix not in line:
+                continue
+            stash_ref, _, remainder = line.partition(":")
+            payload = remainder[remainder.index(prefix) :].strip()
+            entry = {"stash_ref": stash_ref.strip(), "message": payload}
+            for chunk in payload.split("|"):
+                if "=" not in chunk:
+                    continue
+                key, value = chunk.split("=", 1)
+                entry[key] = value
+            entries.append(entry)
+        return entries
+
+    def _managed_carryover(self):
+        entries = self._managed_carryover_entries()
+        if not entries:
+            return None
+        return entries[0]
+
+    def _park_cozy_changes(self, operation, target_ref):
+        if not self.repo or not self.initiated:
+            return {"ok": True, "stashed": False}
+
+        parked = self._managed_carryover()
+        if parked:
+            return {
+                "ok": False,
+                "error": "Parked Cozy changes already exist. Restore them before continuing.",
+            }
+
+        dirty_paths = self._dirty_paths()
+        blocking_paths = self._blocking_dirty_paths(dirty_paths)
+        if blocking_paths:
+            return {
+                "ok": False,
+                "error": "Working tree has non-Cozy changes. Commit or stash them first.",
+            }
+
+        cozy_paths = self._cozy_dirty_paths(dirty_paths)
+        if not cozy_paths:
+            return {"ok": True, "stashed": False}
+
+        source_ref = self._current_ref_label() or "unknown"
+        message = (
+            f"{self.carryover_message_prefix}|operation={operation}|"
+            f"source={source_ref}|target={target_ref or 'HEAD'}"
+        )
+        self.last_carryover_error = None
+        before_refs = [entry["stash_ref"] for entry in self._managed_carryover_entries()]
+        self.repo.git.stash(
+            "push",
+            "--include-untracked",
+            "-m",
+            message,
+            "--",
+            ".cozystudio/manifest.json",
+            ".cozystudio/blocks",
+        )
+        after_entries = self._managed_carryover_entries()
+        for entry in after_entries:
+            if entry["stash_ref"] not in before_refs:
+                self._update_diffs()
+                self.refresh_ui_state()
+                return {"ok": True, "stashed": True, "entry": entry}
+        return {"ok": True, "stashed": False}
+
+    def reapply_parked_changes(self):
+        parked = self._managed_carryover()
+        if not parked:
+            return {"ok": False, "error": "No parked Cozy changes were found."}
+        if self._blocking_dirty_paths(self._dirty_paths()):
+            return {
+                "ok": False,
+                "error": "Working tree has non-Cozy changes. Commit or stash them first.",
+            }
+        if isinstance(self.manifest, dict) and self.manifest.get("conflicts"):
+            return {
+                "ok": False,
+                "error": "Resolve conflicts before restoring parked Cozy changes.",
+            }
+
+        try:
+            self.repo.git.stash("apply", "--index", parked["stash_ref"])
+            self.repo.git.stash("drop", parked["stash_ref"])
+            self.last_carryover_error = None
+            self.restore_ref()
+            return {"ok": True, "restored": True}
+        except Exception as e:
+            self.last_carryover_error = str(e)
+            try:
+                self.repo.git.restore(
+                    "--source=HEAD",
+                    "--staged",
+                    "--worktree",
+                    "--",
+                    ".cozystudio/manifest.json",
+                    ".cozystudio/blocks",
+                )
+            except Exception:
+                pass
+            self.restore_ref()
+            return {
+                "ok": False,
+                "error": f"Parked Cozy changes are still safe in {parked['stash_ref']}: {e}",
+            }
+
+    def restore_ref(self, ref=None, detach=False, operation=None, park_changes=True):
+        parked = None
+        if ref and park_changes:
+            parked = self._park_cozy_changes(
+                operation or ("checkout_commit" if detach else "checkout_branch"),
+                ref,
+            )
+            if not parked.get("ok"):
+                raise RuntimeError(parked["error"])
+
         self.suspend_checks = True
         try:
             if ref:
@@ -47,6 +186,9 @@ class CheckoutMixin:
             redraw("COZYSTUDIO_PT_history")
         finally:
             self.suspend_checks = False
+
+        if parked and parked.get("stashed"):
+            self.reapply_parked_changes()
 
     def _load_working_manifest(self):
         if not self.manifestpath.exists():

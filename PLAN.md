@@ -6,7 +6,7 @@ Current direction:
 - Keep the main workflow simple: `Changes`, `History`, `Branches`.
 - Treat `.cozystudio/manifest.json` and `.cozystudio/blocks/*.json` as the only tracked history artifacts.
 - Rebuild scene state from tracked datablocks for commit checkout and branch checkout.
-- Handle stash/carryover behavior automatically later instead of exposing extra workflow complexity now.
+- Handle stash/carryover behavior automatically with managed Git stash flows hidden behind the UI.
 
 ## Foundation
 
@@ -55,10 +55,10 @@ Current direction:
 
 ## 6. Automatic Carryover / Stash Behavior
 
-- [ ] Define expected behavior for uncommitted Cozy changes during branch checkout and commit checkout
-- [ ] Auto-stash Cozy changes before checkout flows and reapply them when appropriate
-- [ ] Surface recovery UI when stash apply fails or conflicts are introduced
-- [ ] Preserve commit history integrity while carryover logic is active
+- [x] Define expected behavior for uncommitted Cozy changes during branch checkout and commit checkout
+- [x] Auto-stash Cozy changes before checkout, merge, and rebase flows and reapply them when appropriate
+- [x] Surface recovery UI when stash apply fails or conflicts are introduced
+- [x] Preserve commit history integrity while carryover logic is active
 
 ## 7. Testing
 
@@ -67,7 +67,7 @@ Current direction:
 - [x] Add coverage for commit preflight blockers
 - [x] Add coverage for merge/rebase UI flows
 - [ ] Add coverage for structured conflict generation and resolution
-- [ ] Add coverage for future stash/carryover behavior
+- [x] Add coverage for stash/carryover behavior
 
 ## Done When
 

@@ -10,6 +10,7 @@ expected_ops = [
     "cozystudio.commit",
     "cozystudio.checkout_commit",
     "cozystudio.checkout_branch",
+    "cozystudio.reapply_parked_changes",
     "cozystudio.merge",
     "cozystudio.rebase",
     "cozystudio.resolve_conflict",

@@ -113,6 +113,22 @@ def init_git_repo_for_test(ui_mod, timeout=5.0):
     if not blocks_dir.exists() or not blocks_dir.is_dir():
         raise RuntimeError(f".cozystudio/blocks directory not found at {blocks_dir}")
 
+    try:
+        if git_inst.repo is not None and git_inst.repo.head.is_detached:
+            branch_name = get_repo_branch_name(git_inst.repo)
+            if branch_name:
+                git_inst.repo.git.checkout(branch_name)
+                git_inst.restore_ref(branch_name, park_changes=False)
+        if getattr(git_inst, "repo", None) is not None:
+            parked = git_inst._managed_carryover_entries()
+            if parked:
+                git_inst.reapply_parked_changes()
+                parked = git_inst._managed_carryover_entries()
+                for entry in parked:
+                    git_inst.repo.git.stash("drop", entry["stash_ref"])
+    except Exception as exc:
+        raise RuntimeError(f"Failed to normalize test repo state: {exc}") from exc
+
     return git_inst
 
 

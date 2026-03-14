@@ -64,6 +64,8 @@ class BpyGit(
         self.suspend_checks = False
         self.last_integrity_report = None
         self.last_capture_issues = []
+        self.carryover_message_prefix = "cozystudio-carryover"
+        self.last_carryover_error = None
         self.ui_state = self._empty_ui_state()
 
         self.check_interval = check_interval

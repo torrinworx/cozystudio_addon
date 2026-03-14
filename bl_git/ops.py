@@ -54,6 +54,9 @@ class OpsMixin:
             result["conflicts"] = conflicts
             result["blockers"].append("Unresolved conflicts present in manifest.")
 
+        if self._managed_carryover():
+            result["blockers"].append("Restore parked Cozy changes before committing.")
+
         if self.repo.head.is_detached:
             result["blockers"].append("Checkout a branch before committing.")
 
