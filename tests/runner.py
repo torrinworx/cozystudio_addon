@@ -10,6 +10,7 @@ import sys
 import shutil
 import subprocess
 from pathlib import Path
+import importlib.util
 
 import bpy
 import pytest
@@ -17,12 +18,11 @@ import pytest
 
 # Helpers
 def ensure_pytest_installed():
-    try:
-        import pytest  # noqa: F401
-        import pytest_order  # noqa: F401
+    if (
+        importlib.util.find_spec("pytest") is not None
+        and importlib.util.find_spec("pytest_order") is not None
+    ):
         return
-    except Exception:
-        pass
 
     subprocess.check_call(
         [
