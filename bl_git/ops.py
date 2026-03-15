@@ -191,11 +191,33 @@ class OpsMixin:
                 self.manifest[MANIFEST_BOOTSTRAP_KEY] = self._bootstrap_name()
                 self.manifest.write()
 
+            entries = (self.state or {}).get("entries", {})
+            blocks = (self.state or {}).get("blocks", {})
+            block_paths = []
+            for uuid in entries:
+                block_paths.append(f".cozystudio/blocks/{uuid}.json")
+                block_file = self.blockspath / f"{uuid}.json"
+                if not block_file.exists():
+                    data = blocks.get(uuid)
+                    if data is None:
+                        continue
+                    try:
+                        self._write_block_file(uuid, serialize_json_data(data))
+                    except Exception as e:
+                        print(f"[BpyGit] Failed to rebuild block file {uuid}: {e}")
+
+            if block_paths:
+                try:
+                    self.repo.index.add(block_paths)
+                except Exception as e:
+                    print(f"[BpyGit] Failed to stage block files: {e}")
+
             self._stage_manifest_file()
             self._update_diffs()
             self.repo.index.commit(message)
             self._update_diffs()
             redraw("COZYSTUDIO_PT_history")
+            redraw("COZYSTUDIO_PT_branches")
             return {
                 "ok": True,
                 "errors": [],
@@ -251,6 +273,7 @@ class OpsMixin:
         self._update_diffs()
         redraw("COZYSTUDIO_PT_changes")
         redraw("COZYSTUDIO_PT_history")
+        redraw("COZYSTUDIO_PT_branches")
 
     @staticmethod
     def _group_stage_paths(staged_paths, entries, groups):

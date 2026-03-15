@@ -1,3 +1,4 @@
+import re
 import traceback
 from pathlib import Path
 
@@ -7,6 +8,43 @@ from . import state
 
 
 class _CozyOperatorMixin:
+    @staticmethod
+    def _sanitize_branch_name(name):
+        sanitized = re.sub(r"\s+", "-", (name or "").strip())
+        sanitized = re.sub(r"[~^:?*\\\[]+", "-", sanitized)
+        sanitized = sanitized.replace("@{", "-")
+        sanitized = re.sub(r"\.\.+", ".", sanitized)
+        sanitized = re.sub(r"/\.+", "/", sanitized)
+        sanitized = re.sub(r"/+", "/", sanitized)
+        sanitized = sanitized.strip("/.")
+        sanitized = re.sub(r"-+", "-", sanitized)
+        sanitized = re.sub(r"/+$", "", sanitized)
+        if sanitized.endswith(".lock"):
+            sanitized = sanitized[:-5].rstrip(".-/")
+        return sanitized
+
+    @staticmethod
+    def _is_valid_branch_name(repo, branch_name):
+        if not repo or not branch_name:
+            return False
+        try:
+            repo.git.check_ref_format("--branch", branch_name)
+            return True
+        except Exception:
+            return False
+
+    def _resolve_branch_name(self, repo, raw_name):
+        branch_name = (raw_name or "").strip()
+        if not branch_name:
+            return None, None
+        if self._is_valid_branch_name(repo, branch_name):
+            return branch_name, None
+
+        sanitized = self._sanitize_branch_name(branch_name)
+        if sanitized and self._is_valid_branch_name(repo, sanitized):
+            return sanitized, branch_name
+        return None, branch_name
+
     def _require_git(self, require_repo=True):
         if not state.git_instance:
             return "No CozyStudio state is available."
@@ -34,6 +72,24 @@ class _CozyOperatorMixin:
         if state.git_instance._blocking_dirty_paths(dirty_paths):
             return "Working tree has non-Cozy changes. Commit or stash them first."
         return None
+
+    def _integration_preflight(self):
+        error = self._sync_preflight()
+        if error:
+            return error
+        if state.git_instance.repo and state.git_instance.repo.head.is_detached:
+            return "Checkout a branch before merging or rebasing."
+        if getattr(state.git_instance, "manifest", None) and state.git_instance.manifest.get("conflicts"):
+            return "Resolve conflicts before merging or rebasing."
+        return None
+
+    @staticmethod
+    def _parse_ref_token(token):
+        token = (token or "").strip()
+        if not token or token == "NONE" or ":" not in token:
+            return None, None
+        ref_type, name = token.split(":", 1)
+        return ref_type, name
 
 
 class COZYSTUDIO_OT_SetupProject(_CozyOperatorMixin, bpy.types.Operator):
@@ -332,6 +388,78 @@ class COZYSTUDIO_OT_CheckoutCommit(_CozyOperatorMixin, bpy.types.Operator):
             return {"CANCELLED"}
 
 
+class COZYSTUDIO_OT_FetchBranches(_CozyOperatorMixin, bpy.types.Operator):
+    bl_idname = "cozystudio.fetch_branches"
+    bl_label = "Fetch Branches"
+    bl_description = "Fetch remote branches and refresh branch data"
+
+    def execute(self, context):
+        error = self._require_git()
+        if error:
+            self.report({"ERROR"}, error)
+            return {"CANCELLED"}
+        if getattr(state.git_instance, "manifest", None) and state.git_instance.manifest.get("conflicts"):
+            self.report({"ERROR"}, "Resolve conflicts before fetching branch data")
+            return {"CANCELLED"}
+        try:
+            fetched = state.git_instance.fetch_remotes()
+            if not fetched:
+                self.report({"INFO"}, "No remotes configured")
+            else:
+                self.report({"INFO"}, f"Fetched {', '.join(fetched)}")
+            return {"FINISHED"}
+        except Exception as e:
+            self.report({"ERROR"}, f"Fetch failed: {e}")
+            traceback.print_exc()
+            return {"CANCELLED"}
+
+
+class COZYSTUDIO_OT_CheckoutSelectedRef(_CozyOperatorMixin, bpy.types.Operator):
+    bl_idname = "cozystudio.checkout_selected_ref"
+    bl_label = "Switch Ref"
+    bl_description = "Switch to the selected branch or remote tracking branch"
+
+    ref_token: bpy.props.StringProperty(
+        name="Selected Ref",
+        description="Branch or remote ref token",
+        default="",
+    )
+
+    def execute(self, context):
+        error = self._require_git()
+        if error:
+            self.report({"ERROR"}, error)
+            return {"CANCELLED"}
+
+        preflight = self._sync_preflight()
+        if preflight:
+            self.report({"ERROR"}, preflight)
+            return {"CANCELLED"}
+        if getattr(state.git_instance, "manifest", None) and state.git_instance.manifest.get("conflicts"):
+            self.report({"ERROR"}, "Resolve conflicts before switching branches")
+            return {"CANCELLED"}
+
+        token = self.ref_token or context.window_manager.cozystudio_branch_target
+        ref_type, ref_name = self._parse_ref_token(token)
+        if not ref_name:
+            self.report({"WARNING"}, "Choose a branch or remote ref")
+            return {"CANCELLED"}
+
+        try:
+            if ref_type == "remote":
+                state.git_instance.checkout_remote_branch(ref_name)
+                local_name = ref_name.split("/", 1)[-1]
+                self.report({"INFO"}, f"Checked out tracking branch {local_name}")
+            else:
+                state.git_instance.switch_branch(ref_name)
+                self.report({"INFO"}, f"Checked out branch {ref_name}")
+            return {"FINISHED"}
+        except Exception as e:
+            self.report({"ERROR"}, f"Branch switch failed: {e}")
+            traceback.print_exc()
+            return {"CANCELLED"}
+
+
 class COZYSTUDIO_OT_ReapplyParkedChanges(_CozyOperatorMixin, bpy.types.Operator):
     bl_idname = "cozystudio.reapply_parked_changes"
     bl_label = "Restore Parked Changes"
@@ -371,6 +499,9 @@ class COZYSTUDIO_OT_CheckoutBranch(_CozyOperatorMixin, bpy.types.Operator):
         preflight = self._sync_preflight()
         if preflight:
             self.report({"ERROR"}, preflight)
+            return {"CANCELLED"}
+        if getattr(state.git_instance, "manifest", None) and state.git_instance.manifest.get("conflicts"):
+            self.report({"ERROR"}, "Resolve conflicts before switching branches")
             return {"CANCELLED"}
         if not self.branch_name.strip():
             self.report({"WARNING"}, "Please enter a branch name")
@@ -416,14 +547,18 @@ class COZYSTUDIO_OT_CreateBranch(_CozyOperatorMixin, bpy.types.Operator):
         if preflight:
             self.report({"ERROR"}, preflight)
             return {"CANCELLED"}
-
-        branch_name = (self.branch_name or context.window_manager.cozystudio_branch_name or "").strip()
-        if not branch_name:
-            self.report({"WARNING"}, "Please enter a branch name")
+        if getattr(state.git_instance, "manifest", None) and state.git_instance.manifest.get("conflicts"):
+            self.report({"ERROR"}, "Resolve conflicts before creating a branch")
             return {"CANCELLED"}
 
         repo = state.git_instance.repo
-        if repo and branch_name in repo.heads:
+        requested_name = self.branch_name or context.window_manager.cozystudio_branch_name or ""
+        branch_name, adjusted_from = self._resolve_branch_name(repo, requested_name)
+        if not branch_name:
+            self.report({"WARNING"}, "Enter a valid branch name")
+            return {"CANCELLED"}
+
+        if repo and branch_name in {head.name for head in repo.heads}:
             self.report({"ERROR"}, f"Branch '{branch_name}' already exists")
             return {"CANCELLED"}
 
@@ -439,6 +574,9 @@ class COZYSTUDIO_OT_CreateBranch(_CozyOperatorMixin, bpy.types.Operator):
             state.git_instance.create_branch(branch_name, ref=ref)
             if hasattr(context.window_manager, "cozystudio_branch_name"):
                 context.window_manager.cozystudio_branch_name = ""
+            if adjusted_from and adjusted_from != branch_name:
+                self.report({"INFO"}, f"Created branch {branch_name} from '{adjusted_from}'")
+                return {"FINISHED"}
             self.report({"INFO"}, f"Created branch {branch_name}")
             return {"FINISHED"}
         except Exception as e:
@@ -473,10 +611,7 @@ class COZYSTUDIO_OT_Merge(_CozyOperatorMixin, bpy.types.Operator):
         if error:
             self.report({"ERROR"}, error)
             return {"CANCELLED"}
-        if state.git_instance.repo and state.git_instance.repo.head.is_detached:
-            self.report({"ERROR"}, "Checkout a branch before merging")
-            return {"CANCELLED"}
-        preflight = self._sync_preflight()
+        preflight = self._integration_preflight()
         if preflight:
             self.report({"ERROR"}, preflight)
             return {"CANCELLED"}
@@ -532,10 +667,7 @@ class COZYSTUDIO_OT_Rebase(_CozyOperatorMixin, bpy.types.Operator):
         if error:
             self.report({"ERROR"}, error)
             return {"CANCELLED"}
-        if state.git_instance.repo and state.git_instance.repo.head.is_detached:
-            self.report({"ERROR"}, "Checkout a branch before rebasing")
-            return {"CANCELLED"}
-        preflight = self._sync_preflight()
+        preflight = self._integration_preflight()
         if preflight:
             self.report({"ERROR"}, preflight)
             return {"CANCELLED"}
@@ -563,6 +695,67 @@ class COZYSTUDIO_OT_Rebase(_CozyOperatorMixin, bpy.types.Operator):
             return {"FINISHED"}
         self.report({"INFO"}, f"Rebased onto {self.ref_name}")
         return {"FINISHED"}
+
+
+class COZYSTUDIO_OT_IntegrateSelectedRef(_CozyOperatorMixin, bpy.types.Operator):
+    bl_idname = "cozystudio.integrate_selected_ref"
+    bl_label = "Integrate Selected Ref"
+    bl_description = "Merge or rebase the current branch with the selected target"
+
+    ref_token: bpy.props.StringProperty(
+        name="Target Ref",
+        description="Target branch or remote ref token",
+        default="",
+    )
+    mode: bpy.props.EnumProperty(
+        name="Mode",
+        description="Integration mode",
+        items=[
+            ("MERGE", "Merge", "Merge the target into the current branch"),
+            ("REBASE", "Rebase", "Rebase the current branch onto the target"),
+        ],
+        default="MERGE",
+    )
+    strategy: bpy.props.EnumProperty(
+        name="Conflict Strategy",
+        description="How Cozy should handle conflicting blocks",
+        items=[
+            ("manual", "Manual", "Stop and let you resolve conflicts"),
+            ("ours", "Keep Current", "Prefer the current branch on conflict"),
+            ("theirs", "Take Incoming", "Prefer the target branch on conflict"),
+        ],
+        default="manual",
+    )
+
+    def execute(self, context):
+        error = self._require_git()
+        if error:
+            self.report({"ERROR"}, error)
+            return {"CANCELLED"}
+
+        preflight = self._integration_preflight()
+        if preflight:
+            self.report({"ERROR"}, preflight)
+            return {"CANCELLED"}
+
+        token = self.ref_token or context.window_manager.cozystudio_integration_target
+        mode = self.mode or context.window_manager.cozystudio_integration_mode
+        strategy = self.strategy or context.window_manager.cozystudio_conflict_strategy
+        _ref_type, ref_name = self._parse_ref_token(token)
+        if not ref_name:
+            self.report({"WARNING"}, "Choose a branch or remote ref to integrate")
+            return {"CANCELLED"}
+
+        current = state.git_instance.ui_state.get("branch", {}).get("current")
+        if current and ref_name == current:
+            self.report({"WARNING"}, "Choose a different branch than the current branch")
+            return {"CANCELLED"}
+
+        op = bpy.ops.cozystudio.merge if mode == "MERGE" else bpy.ops.cozystudio.rebase
+        result = op("EXEC_DEFAULT", ref_name=ref_name, strategy=strategy)
+        if "FINISHED" in result:
+            return {"FINISHED"}
+        return {"CANCELLED"}
 
 
 class COZYSTUDIO_OT_ResolveConflict(_CozyOperatorMixin, bpy.types.Operator):

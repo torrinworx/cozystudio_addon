@@ -47,12 +47,15 @@ class BlImage(ReplicatedDatablock):
         loader = Loader()
         loader.load(datablock, data)
 
-        # datablock.name = data.get('name')
-        datablock.source = 'FILE'
-        datablock.filepath_raw = get_filepath(data['filename'])
+        filename = data.get('filename')
+        if filename:
+            datablock.source = 'FILE'
+            datablock.filepath_raw = get_filepath(filename)
         color_space_name = data.get("colorspace")
 
-        if color_space_name:
+        if filename and color_space_name and color_space_name in {
+            item.identifier for item in datablock.colorspace_settings.bl_rna.properties['name'].enum_items
+        }:
             datablock.colorspace_settings.name = color_space_name
 
     @staticmethod
@@ -71,7 +74,11 @@ class BlImage(ReplicatedDatablock):
             'size',
             'alpha_mode']
         data.update(dumper.dump(datablock))
-        data['colorspace'] = datablock.colorspace_settings.name
+        if filename and datablock.source == 'FILE':
+            try:
+                data['colorspace'] = datablock.colorspace_settings.name
+            except Exception:
+                pass
 
         return data
 

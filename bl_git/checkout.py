@@ -14,6 +14,56 @@ class CheckoutMixin:
     def switch_branch(self, branch_name):
         self.restore_ref(branch_name, operation="checkout_branch")
 
+    def checkout_remote_branch(self, remote_ref_name, local_name=None):
+        if not self.repo or not self.initiated:
+            raise RuntimeError("Repository not initialized.")
+
+        short_name = local_name or remote_ref_name.split("/", 1)[-1]
+        parked = self._park_cozy_changes("checkout_branch", remote_ref_name)
+        if not parked.get("ok"):
+            raise RuntimeError(parked["error"])
+
+        self.suspend_checks = True
+        try:
+            if short_name in {head.name for head in self.repo.heads}:
+                self.repo.git.checkout(short_name)
+            else:
+                self.repo.git.checkout("-b", short_name, remote_ref_name)
+                self.repo.git.branch("--set-upstream-to", remote_ref_name, short_name)
+
+            self._load_working_manifest()
+            self._restore_from_manifest()
+
+            integrity = self.validate_manifest_integrity()
+            self.last_integrity_report = integrity
+            self._update_diffs()
+
+            redraw("COZYSTUDIO_PT_changes")
+            redraw("COZYSTUDIO_PT_history")
+            redraw("COZYSTUDIO_PT_branches")
+        finally:
+            self.suspend_checks = False
+
+        if parked and parked.get("stashed"):
+            self.reapply_parked_changes()
+
+    def fetch_remotes(self):
+        if not self.repo or not self.initiated:
+            raise RuntimeError("Repository not initialized.")
+        remotes = list(getattr(self.repo, "remotes", []))
+        if not remotes:
+            return []
+
+        fetched = []
+        for remote in remotes:
+            remote.fetch(prune=True)
+            fetched.append(remote.name)
+
+        self.refresh_ui_state()
+        redraw("COZYSTUDIO_PT_history")
+        redraw("COZYSTUDIO_PT_branches")
+        return fetched
+
     def create_branch(self, branch_name, ref=None):
         if not self.repo or not self.initiated:
             raise RuntimeError("Repository not initialized.")
@@ -43,6 +93,7 @@ class CheckoutMixin:
 
             redraw("COZYSTUDIO_PT_changes")
             redraw("COZYSTUDIO_PT_history")
+            redraw("COZYSTUDIO_PT_branches")
         finally:
             self.suspend_checks = False
 
@@ -219,6 +270,7 @@ class CheckoutMixin:
 
             redraw("COZYSTUDIO_PT_changes")
             redraw("COZYSTUDIO_PT_history")
+            redraw("COZYSTUDIO_PT_branches")
         finally:
             self.suspend_checks = False
 
@@ -268,8 +320,6 @@ class CheckoutMixin:
         self.last_capture_issues = issues
 
     def deserialize(self, data: dict):
-        print("DATA: ", data)
-
         type_id = data.get("type_id")
         if isinstance(type_id, (bytes, bytearray)):
             data["type_id"] = type_id.decode("utf-8", errors="ignore")
@@ -293,8 +343,6 @@ class CheckoutMixin:
                         scene.collection.objects.link(restored_data)
                     except RuntimeError:
                         pass
-
-        print(f"[BpyGit] Deserialized created: {restored_data}")
 
     def _topological_sort(self, manifest):
         if isinstance(manifest, dict):

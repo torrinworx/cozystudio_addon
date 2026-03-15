@@ -524,3 +524,31 @@ def test_commit_preflight_returns_structured_blockers():
         assert any(
             "No staged changes" in blocker for blocker in result.get("blockers", [])
         )
+
+
+@pytest.mark.order(16)
+def test_create_branch_normalizes_human_friendly_name():
+    ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
+    git_inst = init_git_repo_for_test(ui_mod)
+
+    test_obj = create_test_object(name="CozyBranchNameObject")
+    ensure_tracking_assignments(git_inst)
+
+    uuid = wait_for_uuid(test_obj)
+    assert uuid
+
+    git_inst._check()
+    group_id = (
+        git_inst.state.get("entries", {}).get(uuid, {}).get("group_id") or uuid
+    )
+    result = bpy.ops.cozystudio.add_group("EXEC_DEFAULT", group_id=group_id)
+    assert "FINISHED" in result
+    result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Branch Name Base")
+    assert "FINISHED" in result
+
+    result = bpy.ops.cozystudio.create_branch(
+        "EXEC_DEFAULT",
+        branch_name="adding purple cone",
+    )
+    assert "FINISHED" in result
+    assert git_inst.repo.active_branch.name == "adding-purple-cone"

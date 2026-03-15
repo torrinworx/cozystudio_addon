@@ -48,12 +48,20 @@ class StateMixin:
             },
             "branch": {
                 "current": None,
+                "current_ref": None,
+                "current_ref_type": None,
                 "detached": False,
                 "head_hash": None,
                 "head_short_hash": None,
                 "head_summary": None,
                 "last_branch": getattr(self, "last_branch", None),
                 "available": [],
+                "local": [],
+                "remote": [],
+                "recent": [],
+                "upstream": None,
+                "ahead": 0,
+                "behind": 0,
             },
             "commit": {
                 "viewing_past": False,
@@ -96,7 +104,137 @@ class StateMixin:
                 "target": None,
                 "error": None,
             },
+            "workflow": {
+                "state": "idle",
+                "summary": None,
+                "detail": None,
+                "dirty_cozy": 0,
+                "dirty_non_cozy": 0,
+                "has_conflicts": False,
+                "can_switch": True,
+                "can_create": True,
+                "can_merge": True,
+                "can_rebase": True,
+                "can_fetch": True,
+                "blockers": [],
+            },
         }
+
+    @staticmethod
+    def _ref_ui_row(name, ref_type="local", is_current=False, upstream=None):
+        label = name
+        if ref_type == "remote":
+            label = f"{name} [remote]"
+        elif is_current:
+            label = f"{name} [current]"
+        description = name if ref_type == "local" else f"Remote branch {name}"
+        if upstream:
+            description = f"{description} tracking {upstream}"
+        return {
+            "name": name,
+            "type": ref_type,
+            "label": label,
+            "description": description,
+            "is_current": is_current,
+            "upstream": upstream,
+        }
+
+    def _recent_branch_names(self):
+        if not self.repo:
+            return []
+        recent = []
+        seen = set()
+        current = None
+        try:
+            if not self.repo.head.is_detached:
+                current = self.repo.active_branch.name
+        except Exception:
+            current = None
+
+        candidates = [getattr(self, "last_branch", None)]
+        try:
+            reflog_lines = self.repo.git.reflog("--format=%gs").splitlines()
+        except Exception:
+            reflog_lines = []
+
+        for line in reflog_lines:
+            if not line.startswith("checkout: moving from "):
+                continue
+            target = line.split(" to ")[-1].strip()
+            if target:
+                candidates.append(target)
+
+        local_names = {head.name for head in self.repo.heads}
+        for name in candidates:
+            if not name or name == current or name not in local_names or name in seen:
+                continue
+            seen.add(name)
+            recent.append(name)
+            if len(recent) >= 5:
+                break
+        return recent
+
+    def _ahead_behind_counts(self, current_branch_name, upstream_name):
+        if not self.repo or not current_branch_name or not upstream_name:
+            return 0, 0
+        try:
+            counts = self.repo.git.rev_list(
+                "--left-right",
+                "--count",
+                f"{current_branch_name}...{upstream_name}",
+            ).strip()
+            ahead, behind = counts.split()
+            return int(ahead), int(behind)
+        except Exception:
+            return 0, 0
+
+    def _workflow_blockers(self, ui_state, dirty_paths, cozy_paths, blocking_paths):
+        blockers = []
+        workflow = ui_state["workflow"]
+        branch_ui = ui_state["branch"]
+        carryover_ui = ui_state["carryover"]
+        conflicts_ui = ui_state["conflicts"]
+
+        workflow["dirty_cozy"] = len(cozy_paths)
+        workflow["dirty_non_cozy"] = len(blocking_paths)
+        workflow["has_conflicts"] = conflicts_ui.get("has_conflicts", False)
+
+        if carryover_ui.get("has_parked"):
+            blockers.append("Restore parked Cozy changes before switching, merging, or rebasing.")
+            workflow["state"] = "parked"
+            workflow["summary"] = "Parked changes pending"
+            workflow["detail"] = "Restore or clear parked Cozy changes before other branch actions."
+        elif conflicts_ui.get("has_conflicts"):
+            operation = conflicts_ui.get("operation") or "merge"
+            blockers.append(f"Resolve {operation} conflicts before more branch actions.")
+            workflow["state"] = f"{operation}_conflicts"
+            workflow["summary"] = f"{operation.title()} conflicts need resolution"
+            workflow["detail"] = "Use the Conflicts panel to choose mine, theirs, or resolve manually."
+        elif branch_ui.get("detached"):
+            workflow["state"] = "detached"
+            workflow["summary"] = "Detached HEAD"
+            workflow["detail"] = "You can create a branch here or return to a branch before integrating changes."
+        else:
+            workflow["state"] = "idle"
+            workflow["summary"] = f"On branch {branch_ui.get('current') or 'unknown'}"
+            workflow["detail"] = branch_ui.get("head_summary") or ""
+
+        if cozy_paths and not carryover_ui.get("has_parked") and not conflicts_ui.get("has_conflicts"):
+            workflow["detail"] = "Local Cozy changes will be parked and restored during branch switches or integrations."
+
+        if blocking_paths:
+            blockers.append("Working tree has non-Cozy changes. Commit or stash them first.")
+
+        workflow["can_fetch"] = not conflicts_ui.get("has_conflicts", False)
+        workflow["can_switch"] = not carryover_ui.get("has_parked") and not conflicts_ui.get(
+            "has_conflicts", False
+        ) and not blocking_paths
+        workflow["can_create"] = workflow["can_switch"]
+        workflow["can_merge"] = workflow["can_switch"] and not branch_ui.get("detached")
+        workflow["can_rebase"] = workflow["can_merge"]
+
+        workflow["blockers"] = blockers
+        return blockers
 
     @classmethod
     def _type_label(cls, datablock_type):
@@ -388,6 +526,9 @@ class StateMixin:
             )
 
         if self.repo is not None:
+            dirty_paths = self._dirty_paths()
+            cozy_paths = self._cozy_dirty_paths(dirty_paths)
+            blocking_paths = self._blocking_dirty_paths(dirty_paths)
             head_hash = None
             if self.repo.head.is_valid():
                 try:
@@ -411,6 +552,8 @@ class StateMixin:
             ui_state["branch"]["detached"] = detached
 
             if detached:
+                ui_state["branch"]["current_ref"] = ui_state["branch"]["head_short_hash"]
+                ui_state["branch"]["current_ref_type"] = "detached"
                 ui_state["commit"]["viewing_past"] = True
                 return_branch = None
                 if self.last_branch and self.last_branch in self.repo.heads:
@@ -428,15 +571,60 @@ class StateMixin:
             else:
                 try:
                     ui_state["branch"]["current"] = self.repo.active_branch.name
+                    ui_state["branch"]["current_ref"] = self.repo.active_branch.name
+                    ui_state["branch"]["current_ref_type"] = "branch"
                 except Exception:
                     ui_state["branch"]["current"] = None
 
-            ui_state["branch"]["available"] = [
-                {
-                    "name": head.name,
-                    "is_current": head.name == ui_state["branch"].get("current"),
-                }
-                for head in sorted(self.repo.heads, key=lambda item: item.name)
+                try:
+                    tracking = self.repo.active_branch.tracking_branch()
+                except Exception:
+                    tracking = None
+                if tracking is not None:
+                    ui_state["branch"]["upstream"] = tracking.name
+                    ahead, behind = self._ahead_behind_counts(
+                        ui_state["branch"]["current"],
+                        tracking.name,
+                    )
+                    ui_state["branch"]["ahead"] = ahead
+                    ui_state["branch"]["behind"] = behind
+
+            local_rows = []
+            for head in sorted(self.repo.heads, key=lambda item: item.name):
+                upstream = None
+                try:
+                    tracking = head.tracking_branch()
+                    upstream = tracking.name if tracking is not None else None
+                except Exception:
+                    upstream = None
+                local_rows.append(
+                    self._ref_ui_row(
+                        head.name,
+                        ref_type="local",
+                        is_current=head.name == ui_state["branch"].get("current"),
+                        upstream=upstream,
+                    )
+                )
+            ui_state["branch"]["local"] = local_rows
+            ui_state["branch"]["available"] = list(local_rows)
+
+            remote_rows = []
+            seen_remote = set()
+            for remote in getattr(self.repo, "remotes", []):
+                for ref in getattr(remote, "refs", []):
+                    ref_name = getattr(ref, "name", None)
+                    if not ref_name or ref_name.endswith("/HEAD") or ref_name in seen_remote:
+                        continue
+                    seen_remote.add(ref_name)
+                    remote_rows.append(self._ref_ui_row(ref_name, ref_type="remote"))
+            ui_state["branch"]["remote"] = sorted(
+                remote_rows,
+                key=lambda item: item.get("name", ""),
+            )
+
+            ui_state["branch"]["recent"] = [
+                self._ref_ui_row(name, ref_type="local")
+                for name in self._recent_branch_names()
             ]
 
             try:
@@ -455,6 +643,8 @@ class StateMixin:
                 for commit in commits
             ]
             ui_state["history"]["count"] = len(ui_state["history"]["items"])
+
+            self._workflow_blockers(ui_state, dirty_paths, cozy_paths, blocking_paths)
 
         diffs = list(self.diffs or [])
         staged = [diff for diff in diffs if diff.get("status", "").startswith("staged")]

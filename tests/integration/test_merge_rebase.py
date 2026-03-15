@@ -4,6 +4,7 @@ import bpy
 import pytest
 
 from ..helpers import (
+    assert_no_parked_changes,
     clear_manifest_conflicts,
     create_test_object,
     ensure_tracking_assignments,
@@ -361,3 +362,65 @@ def test_merge_parks_cozy_changes_until_restored():
     )
     git_inst.restore_ref()
     git_inst.repo.git.branch("-D", "feature_carryover_merge")
+
+
+@pytest.mark.order(27)
+def test_clean_branch_switch_and_merge_do_not_trigger_carryover():
+    ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
+    git_inst = init_git_repo_for_test(ui_mod)
+    clear_manifest_conflicts(git_inst)
+
+    base_branch = get_repo_branch_name(git_inst.repo)
+    assert base_branch
+
+    obj = create_test_object(name="CozyCleanMergeCarryoverObject")
+    obj.location.x = 0.0
+    ensure_tracking_assignments(git_inst)
+    uuid = wait_for_uuid(obj)
+    assert uuid
+    git_inst._check()
+    assert wait_for_block_file(git_inst, uuid)
+
+    _stage_group(git_inst, uuid)
+    result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Clean merge base")
+    assert "FINISHED" in result
+
+    result = bpy.ops.cozystudio.create_branch(
+        "EXEC_DEFAULT",
+        branch_name="feature_clean_merge",
+    )
+    assert "FINISHED" in result
+    assert git_inst.repo.active_branch.name == "feature_clean_merge"
+
+    obj.location.x = 5.0
+    git_inst._check()
+    _stage_group(git_inst, uuid)
+    result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Clean merge feature")
+    assert "FINISHED" in result
+
+    result = bpy.ops.cozystudio.checkout_branch(
+        "EXEC_DEFAULT",
+        branch_name=base_branch,
+    )
+    assert "FINISHED" in result
+    assert git_inst.repo.active_branch.name == base_branch
+    assert_no_parked_changes(git_inst)
+
+    dirty_paths = git_inst._dirty_paths()
+    cozy_dirty = git_inst._cozy_dirty_paths(dirty_paths)
+    assert not cozy_dirty, (
+        "Switching back to the base branch should leave no dirty Cozy paths before merge; "
+        f"found {sorted(cozy_dirty)}"
+    )
+
+    merge_result = git_inst.merge("feature_clean_merge", strategy="manual")
+    assert merge_result.get("ok"), merge_result
+    assert not merge_result.get("conflicts")
+    assert not merge_result.get("carryover"), merge_result
+    assert_no_parked_changes(git_inst)
+
+    data = git_inst._read(uuid)
+    matrix = data.get("transforms", {}).get("matrix_basis", [])
+    assert matrix and abs(matrix[0][3] - 5.0) < 1e-4
+
+    git_inst.repo.git.branch("-D", "feature_clean_merge")

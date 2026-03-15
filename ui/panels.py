@@ -12,6 +12,24 @@ def _repo_ready(git_ui):
     return bool(state.git_instance) and bool(git_ui.get("repo", {}).get("initiated"))
 
 
+def _ref_name_from_token(token):
+    token = (token or "").strip()
+    if not token or token == "NONE" or ":" not in token:
+        return None, None
+    return token.split(":", 1)
+
+
+def _find_ref_row(branch_ui, token):
+    ref_type, ref_name = _ref_name_from_token(token)
+    if not ref_name:
+        return None
+    for section in ("recent", "local", "remote"):
+        for item in branch_ui.get(section, []):
+            if item.get("type") == ref_type and item.get("name") == ref_name:
+                return item
+    return None
+
+
 def _draw_repo_missing(layout):
     box = layout.box()
     box.label(text="Welcome to Cozy Studio", icon="INFO")
@@ -298,32 +316,73 @@ class COZYSTUDIO_PT_BranchesPanel(bpy.types.Panel):
         branch_ui = git_ui.get("branch", {})
         commit_ui = git_ui.get("commit", {})
         carryover_ui = git_ui.get("carryover", {})
+        workflow_ui = git_ui.get("workflow", {})
+        conflicts_ui = git_ui.get("conflicts", {})
+        wm = context.window_manager
+
+        status_box = layout.box()
+        status_box.label(text="Branch Status", icon="CURRENT_FILE")
+        if branch_ui.get("detached"):
+            status_box.label(
+                text=f"Detached at {branch_ui.get('head_short_hash') or 'commit'}",
+                icon="TIME",
+            )
+            if branch_ui.get("head_summary"):
+                status_box.label(text=branch_ui["head_summary"], icon="FILE_TEXT")
+        else:
+            status_box.label(
+                text=f"On branch: {branch_ui.get('current') or 'unknown'}",
+                icon="CURRENT_FILE",
+            )
+            if branch_ui.get("upstream"):
+                status_box.label(
+                    text=(
+                        f"Tracks {branch_ui['upstream']}  "
+                        f"ahead {branch_ui.get('ahead', 0)}  behind {branch_ui.get('behind', 0)}"
+                    ),
+                    icon="LINKED",
+                )
+            if branch_ui.get("head_summary"):
+                status_box.label(
+                    text=f"HEAD {branch_ui.get('head_short_hash') or ''}  {branch_ui['head_summary']}",
+                    icon="FILE_TEXT",
+                )
+
+        workflow_box = layout.box()
+        workflow_box.label(text=workflow_ui.get("summary") or "Workflow", icon="INFO")
+        if workflow_ui.get("detail"):
+            workflow_box.label(text=workflow_ui["detail"])
+        if workflow_ui.get("dirty_cozy"):
+            workflow_box.label(
+                text=f"Local Cozy changes: {workflow_ui['dirty_cozy']}",
+                icon="GREASEPENCIL",
+            )
+        if workflow_ui.get("dirty_non_cozy"):
+            workflow_box.label(
+                text=f"Non-Cozy changes blocking branch actions: {workflow_ui['dirty_non_cozy']}",
+                icon="ERROR",
+            )
+        for blocker in workflow_ui.get("blockers", [])[:3]:
+            workflow_box.label(text=blocker, icon="ERROR")
 
         if carryover_ui.get("has_parked"):
             box = layout.box()
-            box.label(text="Parked Cozy changes must be restored first.", icon="INFO")
+            box.label(text="Parked Cozy changes", icon="INFO")
+            if carryover_ui.get("operation"):
+                box.label(text=f"Created during {carryover_ui['operation']}")
+            if carryover_ui.get("source") or carryover_ui.get("target"):
+                box.label(
+                    text=(
+                        f"From {carryover_ui.get('source') or 'unknown'} "
+                        f"to {carryover_ui.get('target') or 'unknown'}"
+                    )
+                )
             box.operator(
                 "cozystudio.reapply_parked_changes",
                 text="Restore Parked Changes",
                 icon="IMPORT",
             )
 
-        if branch_ui.get("detached"):
-            row = layout.row(align=True)
-            row.label(
-                text=f"Detached at {branch_ui.get('head_short_hash') or 'commit'} (not on a branch)",
-                icon="TIME",
-            )
-            if commit_ui.get("return_branch"):
-                op = row.operator("cozystudio.checkout_branch", text="Return to Branch", icon="LOOP_BACK")
-                op.branch_name = commit_ui["return_branch"]
-        else:
-            layout.label(
-                text=f"On branch: {branch_ui.get('current') or 'unknown'}",
-                icon="CURRENT_FILE",
-            )
-
-        wm = context.window_manager
         history_items = git_ui.get("history", {}).get("items", [])
         selected_commit = None
         if history_items:
@@ -331,6 +390,40 @@ class COZYSTUDIO_PT_BranchesPanel(bpy.types.Panel):
                 selected_commit = history_items[wm.cozystudio_commit_index]
             except Exception:
                 selected_commit = None
+
+        switch_box = layout.box()
+        switch_box.label(text="Switch Branch", icon="FILE_PARENT")
+        switch_box.prop(wm, "cozystudio_branch_target", text="Target")
+        selected_ref = _find_ref_row(branch_ui, getattr(wm, "cozystudio_branch_target", ""))
+        if selected_ref:
+            switch_box.label(
+                text=selected_ref.get("description") or selected_ref.get("label") or selected_ref.get("name"),
+                icon="INFO",
+            )
+        elif branch_ui.get("local") or branch_ui.get("remote"):
+            switch_box.label(text="Choose a branch or remote ref to switch to.", icon="INFO")
+
+        switch_row = switch_box.row(align=True)
+        switch_row.enabled = workflow_ui.get("can_switch", True) and bool(selected_ref)
+        switch_op = switch_row.operator(
+            "cozystudio.checkout_selected_ref",
+            text=(
+                "Checkout Tracking Branch"
+                if selected_ref and selected_ref.get("type") == "remote"
+                else "Switch Branch"
+            ),
+            icon="LOOP_BACK",
+        )
+        switch_op.ref_token = getattr(wm, "cozystudio_branch_target", "")
+        fetch_row = switch_box.row(align=True)
+        fetch_row.enabled = workflow_ui.get("can_fetch", True)
+        fetch_row.operator("cozystudio.fetch_branches", text="Fetch / Refresh", icon="FILE_REFRESH")
+
+        if branch_ui.get("detached") and commit_ui.get("return_branch"):
+            return_row = switch_box.row(align=True)
+            return_row.enabled = workflow_ui.get("can_switch", True)
+            op = return_row.operator("cozystudio.checkout_branch", text="Return to Branch", icon="LOOP_BACK")
+            op.branch_name = commit_ui["return_branch"]
 
         create_box = layout.box()
         create_box.label(text="Create Branch", icon="ADD")
@@ -376,32 +469,60 @@ class COZYSTUDIO_PT_BranchesPanel(bpy.types.Panel):
 
         create_row = create_box.row()
         branch_name = (getattr(wm, "cozystudio_branch_name", "") or "").strip()
-        can_create = bool(branch_name) and (source != "SELECTED" or selected_commit)
+        can_create = (
+            workflow_ui.get("can_create", True)
+            and bool(branch_name)
+            and (source != "SELECTED" or selected_commit)
+        )
         create_row.enabled = can_create
         op = create_row.operator("cozystudio.create_branch", text="Create Branch", icon="ADD")
         op.branch_name = branch_name
         op.ref = selected_commit.get("commit_hash", "") if selected_commit and source == "SELECTED" else ""
 
-        branches = branch_ui.get("available", [])
-        if not branches:
-            layout.label(text="No local branches found.", icon="INFO")
-            return
+        integrate_box = layout.box()
+        integrate_box.label(text="Integrate Into Current Branch", icon="SORTTIME")
+        integrate_box.prop(wm, "cozystudio_integration_mode", text="Mode")
+        integrate_box.prop(wm, "cozystudio_integration_target", text="Target")
+        integrate_box.prop(wm, "cozystudio_conflict_strategy", text="Conflicts")
 
-        for branch in branches:
-            row = layout.row(align=True)
-            row.label(
-                text=branch.get("name", "branch"),
-                icon="RADIOBUT_ON" if branch.get("is_current") else "BLANK1",
-            )
-            if branch.get("is_current"):
-                continue
+        selected_target = _find_ref_row(branch_ui, getattr(wm, "cozystudio_integration_target", ""))
+        if selected_target:
+            mode_label = "Merge" if wm.cozystudio_integration_mode == "MERGE" else "Rebase"
+            current_name = branch_ui.get("current") or "current branch"
+            if wm.cozystudio_integration_mode == "MERGE":
+                summary = f"{mode_label} {selected_target.get('name')} into {current_name}"
+            else:
+                summary = f"{mode_label} {current_name} onto {selected_target.get('name')}"
+            integrate_box.label(text=summary, icon="INFO")
+        else:
+            integrate_box.label(text="Choose a branch or remote ref to integrate.", icon="INFO")
 
-            op = row.operator("cozystudio.checkout_branch", text="Checkout", icon="LOOP_BACK")
-            op.branch_name = branch.get("name", "")
-            op = row.operator("cozystudio.merge", text="Merge", icon="IMPORT")
-            op.ref_name = branch.get("name", "")
-            op = row.operator("cozystudio.rebase", text="Rebase", icon="TRIA_RIGHT_BAR")
-            op.ref_name = branch.get("name", "")
+        if branch_ui.get("detached"):
+            integrate_box.label(text="Checkout a branch before merging or rebasing.", icon="ERROR")
+        if conflicts_ui.get("has_conflicts"):
+            integrate_box.label(text="Finish current conflicts before another integration.", icon="ERROR")
+
+        integrate_row = integrate_box.row()
+        can_integrate = bool(selected_target)
+        if wm.cozystudio_integration_mode == "MERGE":
+            can_integrate = can_integrate and workflow_ui.get("can_merge", True)
+        else:
+            can_integrate = can_integrate and workflow_ui.get("can_rebase", True)
+        integrate_row.enabled = can_integrate
+        op = integrate_row.operator(
+            "cozystudio.integrate_selected_ref",
+            text="Start Integration",
+            icon="IMPORT" if wm.cozystudio_integration_mode == "MERGE" else "TRIA_RIGHT_BAR",
+        )
+        op.ref_token = getattr(wm, "cozystudio_integration_target", "")
+        op.mode = wm.cozystudio_integration_mode
+        op.strategy = wm.cozystudio_conflict_strategy
+
+        if branch_ui.get("recent"):
+            recent_box = layout.box()
+            recent_box.label(text="Recent Branches", icon="RECOVER_LAST")
+            for branch in branch_ui.get("recent", []):
+                recent_box.label(text=branch.get("name", "branch"), icon="FILE_PARENT")
 
 
 class COZYSTUDIO_PT_ConflictsPanel(bpy.types.Panel):

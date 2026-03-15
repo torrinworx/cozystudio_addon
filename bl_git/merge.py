@@ -176,6 +176,7 @@ class MergeMixin:
             self._update_diffs()
             redraw("COZYSTUDIO_PT_changes")
             redraw("COZYSTUDIO_PT_history")
+            redraw("COZYSTUDIO_PT_branches")
         except Exception as e:
             errors.append(str(e))
         finally:
