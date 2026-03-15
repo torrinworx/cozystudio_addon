@@ -627,8 +627,14 @@ class StateMixin:
                 for name in self._recent_branch_names()
             ]
 
+            history_ref = "HEAD"
+            if not detached:
+                try:
+                    history_ref = self.repo.active_branch.name or "HEAD"
+                except Exception:
+                    history_ref = "HEAD"
             try:
-                commits = list(self.repo.iter_commits(all=True, max_count=10))
+                commits = list(self.repo.iter_commits(history_ref, max_count=10))
             except Exception:
                 commits = []
             ui_state["history"]["items"] = [

@@ -379,18 +379,13 @@ def test_flow_order_stress_sequence():
     )
     assert "FINISHED" in result
 
-    obj.location.x = 8.0
-    git_inst._check()
-    result = bpy.ops.cozystudio.add_group(
-        "EXEC_DEFAULT", group_id=_group_id_for_uuid(git_inst, uuid)
-    )
-    assert "FINISHED" in result
-    result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Flow Order After Merge")
-    assert "FINISHED" in result
+    assert_no_parked_changes(git_inst)
+    _assert_only_cozy_dirty(git_inst)
+    assert not get_dirty_block_paths(git_inst)
 
     restored = _find_object_by_uuid(uuid)
     assert restored is not None
-    assert abs(restored.location.x - 8.0) < 1e-4
+    assert abs(restored.location.x - 6.0) < 1e-4
 
     assert_manifest_integrity_ok(git_inst)
     assert_no_parked_changes(git_inst)

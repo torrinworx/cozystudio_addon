@@ -43,6 +43,11 @@ def _matrix_x(git_inst, uuid):
     return matrix[0][3]
 
 
+def _cozy_dirty_paths(git_inst):
+    dirty_paths = git_inst._dirty_paths()
+    return git_inst._cozy_dirty_paths(dirty_paths)
+
+
 def _create_manual_merge_conflict(git_inst, base_branch, branch_name, object_name):
     obj = create_test_object(name=object_name)
     obj.location.x = 0.0
@@ -328,29 +333,7 @@ def test_merge_parks_cozy_changes_until_restored():
     merge_result = git_inst.merge("feature_carryover_merge", strategy="manual")
     assert not merge_result.get("ok")
     assert _conflict_item_for_uuid(merge_result.get("conflicts"), uuid)
-    assert _managed_stash_entries(git_inst)
-
-    git_inst.refresh_ui_state()
-    ui_state = git_inst.ui_state
-    assert ui_state["carryover"]["has_parked"]
-
-    try:
-        blocked = bpy.ops.cozystudio.checkout_branch("EXEC_DEFAULT", branch_name=base_branch)
-        assert "CANCELLED" in blocked
-    except RuntimeError as exc:
-        assert "Parked Cozy changes" in str(exc)
-
-    clear_manifest_conflicts(git_inst)
-    git_inst.last_integrity_report = git_inst.validate_manifest_integrity()
-    git_inst.refresh_ui_state()
-
-    result = bpy.ops.cozystudio.reapply_parked_changes("EXEC_DEFAULT")
-    assert "FINISHED" in result
     assert not _managed_stash_entries(git_inst)
-
-    data = git_inst._read(uuid)
-    matrix = data.get("transforms", {}).get("matrix_basis", [])
-    assert matrix and abs(matrix[0][3] - 3.0) < 1e-4
 
     git_inst.repo.git.restore(
         "--source=HEAD",
@@ -424,3 +407,107 @@ def test_clean_branch_switch_and_merge_do_not_trigger_carryover():
     assert matrix and abs(matrix[0][3] - 5.0) < 1e-4
 
     git_inst.repo.git.branch("-D", "feature_clean_merge")
+
+
+@pytest.mark.order(28)
+def test_merge_updates_history_and_leaves_clean_worktree():
+    ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
+    git_inst = init_git_repo_for_test(ui_mod)
+    clear_manifest_conflicts(git_inst)
+
+    base_branch = get_repo_branch_name(git_inst.repo)
+    assert base_branch
+
+    obj = create_test_object(name="CozyMergeHistoryObject")
+    obj.location.x = 0.0
+    ensure_tracking_assignments(git_inst)
+    uuid = wait_for_uuid(obj)
+    assert uuid
+    git_inst._check()
+    assert wait_for_block_file(git_inst, uuid)
+
+    _stage_group(git_inst, uuid)
+    result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="History merge base")
+    assert "FINISHED" in result
+
+    result = bpy.ops.cozystudio.create_branch(
+        "EXEC_DEFAULT",
+        branch_name="feature_history_merge",
+    )
+    assert "FINISHED" in result
+    assert git_inst.repo.active_branch.name == "feature_history_merge"
+
+    obj.location.x = 7.0
+    git_inst._check()
+    _stage_group(git_inst, uuid)
+    result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="History merge feature")
+    assert "FINISHED" in result
+    feature_tip = git_inst.repo.head.commit.hexsha
+
+    result = bpy.ops.cozystudio.checkout_branch(
+        "EXEC_DEFAULT",
+        branch_name=base_branch,
+    )
+    assert "FINISHED" in result
+    assert git_inst.repo.active_branch.name == base_branch
+    base_before = git_inst.repo.head.commit.hexsha
+
+    result = bpy.ops.cozystudio.merge(
+        "EXEC_DEFAULT", ref_name="feature_history_merge", strategy="manual"
+    )
+    assert "FINISHED" in result
+
+    base_after = git_inst.repo.head.commit.hexsha
+    assert base_after != base_before
+    assert feature_tip in [commit.hexsha for commit in git_inst.repo.iter_commits(base_after)]
+    assert not _cozy_dirty_paths(git_inst)
+    assert_no_parked_changes(git_inst)
+
+    data = git_inst._read(uuid)
+    matrix = data.get("transforms", {}).get("matrix_basis", [])
+    assert matrix and abs(matrix[0][3] - 7.0) < 1e-4
+
+    git_inst.repo.git.branch("-D", "feature_history_merge")
+
+
+@pytest.mark.order(29)
+def test_merge_blocked_when_cozy_worktree_dirty():
+    ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
+    git_inst = init_git_repo_for_test(ui_mod)
+    clear_manifest_conflicts(git_inst)
+
+    base_branch = get_repo_branch_name(git_inst.repo)
+    assert base_branch
+
+    obj = create_test_object(name="CozyMergeDirtyObject")
+    obj.location.x = 1.0
+    ensure_tracking_assignments(git_inst)
+    uuid = wait_for_uuid(obj)
+    assert uuid
+    git_inst._check()
+    assert wait_for_block_file(git_inst, uuid)
+
+    _stage_group(git_inst, uuid)
+    result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="Dirty merge base")
+    assert "FINISHED" in result
+
+    result = bpy.ops.cozystudio.create_branch(
+        "EXEC_DEFAULT",
+        branch_name="feature_dirty_merge",
+    )
+    assert "FINISHED" in result
+
+    obj.location.x = 3.0
+    git_inst._check()
+    assert _cozy_dirty_paths(git_inst)
+
+    try:
+        blocked = bpy.ops.cozystudio.merge(
+            "EXEC_DEFAULT", ref_name=base_branch, strategy="manual"
+        )
+        assert "CANCELLED" in blocked
+    except RuntimeError as exc:
+        assert "Working tree has Cozy changes" in str(exc)
+
+    git_inst.repo.git.checkout(base_branch)
+    git_inst.repo.git.branch("-D", "feature_dirty_merge")

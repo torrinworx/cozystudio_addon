@@ -552,3 +552,53 @@ def test_create_branch_normalizes_human_friendly_name():
     )
     assert "FINISHED" in result
     assert git_inst.repo.active_branch.name == "adding-purple-cone"
+
+
+@pytest.mark.order(17)
+def test_history_scoped_to_current_branch():
+    ui_mod = importlib.import_module(f"{ADDON_MODULE}.ui")
+    git_inst = init_git_repo_for_test(ui_mod)
+    base_branch = get_repo_branch_name(git_inst.repo)
+    assert base_branch
+
+    test_obj = create_test_object(name="CozyHistoryScopeObject")
+    test_obj.location.x = 1.0
+    ensure_tracking_assignments(git_inst)
+
+    uuid = wait_for_uuid(test_obj)
+    assert uuid
+
+    git_inst._check()
+    group_id = (
+        git_inst.state.get("entries", {}).get(uuid, {}).get("group_id") or uuid
+    )
+    result = bpy.ops.cozystudio.add_group("EXEC_DEFAULT", group_id=group_id)
+    assert "FINISHED" in result
+    result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="History Base")
+    assert "FINISHED" in result
+
+    branch_name = "feature_history_scope"
+    git_inst.create_branch(branch_name)
+
+    test_obj.location.x = 2.0
+    git_inst._check()
+    result = bpy.ops.cozystudio.add_group("EXEC_DEFAULT", group_id=group_id)
+    assert "FINISHED" in result
+    result = bpy.ops.cozystudio.commit("EXEC_DEFAULT", message="History Feature")
+    assert "FINISHED" in result
+    feature_commit = git_inst.repo.head.commit.hexsha
+
+    git_inst.refresh_ui_state()
+    feature_history_hashes = {
+        item.get("commit_hash") for item in git_inst.ui_state["history"]["items"]
+    }
+    assert feature_commit in feature_history_hashes
+
+    git_inst.switch_branch(base_branch)
+    git_inst.refresh_ui_state()
+    base_history_hashes = {
+        item.get("commit_hash") for item in git_inst.ui_state["history"]["items"]
+    }
+    assert feature_commit not in base_history_hashes
+
+    git_inst.repo.git.branch("-D", branch_name)

@@ -81,6 +81,10 @@ class _CozyOperatorMixin:
             return "Checkout a branch before merging or rebasing."
         if getattr(state.git_instance, "manifest", None) and state.git_instance.manifest.get("conflicts"):
             return "Resolve conflicts before merging or rebasing."
+        dirty_paths = state.git_instance._dirty_paths()
+        cozy_dirty = state.git_instance._cozy_dirty_paths(dirty_paths)
+        if cozy_dirty:
+            return "Working tree has Cozy changes. Commit or discard them before merging or rebasing."
         return None
 
     @staticmethod

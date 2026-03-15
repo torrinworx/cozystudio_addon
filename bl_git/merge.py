@@ -25,10 +25,6 @@ class MergeMixin:
                 "errors": ["Parked Cozy changes already exist. Restore them before continuing."],
                 "conflicts": [],
             }
-        parked = self._park_cozy_changes("merge", ref)
-        if not parked.get("ok"):
-            return {"ok": False, "errors": [parked["error"]], "conflicts": []}
-
         ours_ref = self.repo.head.commit.hexsha
         try:
             base_ref = self.repo.git.merge_base(ours_ref, ref).strip()
@@ -36,14 +32,11 @@ class MergeMixin:
             base_ref = None
 
         result = self._merge_refs(base_ref, ours_ref, ref, strategy=strategy)
-        if parked.get("stashed"):
-            if result.get("ok") and not result.get("conflicts"):
-                carryover_result = self.reapply_parked_changes()
-                result["carryover"] = carryover_result
-                if not carryover_result.get("ok"):
-                    result["warnings"] = [carryover_result["error"]]
-            else:
-                result["carryover"] = {"ok": False, "parked": True}
+        if result.get("ok") and not result.get("conflicts"):
+            commit_result = self._finalize_integration_commit(ref, base_ref)
+            if not commit_result.get("ok"):
+                result["warnings"] = [commit_result.get("error")]
+            result["integration"] = commit_result
         return result
 
     def rebase(self, onto_ref, strategy="manual"):
@@ -55,20 +48,10 @@ class MergeMixin:
                 "errors": ["Parked Cozy changes already exist. Restore them before continuing."],
                 "conflicts": [],
             }
-        parked = self._park_cozy_changes("rebase", onto_ref)
-        if not parked.get("ok"):
-            return {"ok": False, "errors": [parked["error"]], "conflicts": []}
-
         head_ref = self.repo.head.commit.hexsha
         commits = list(self.repo.iter_commits(f"{onto_ref}..{head_ref}", reverse=True))
         if not commits:
-            result = {"ok": True, "errors": [], "conflicts": []}
-            if parked.get("stashed"):
-                carryover_result = self.reapply_parked_changes()
-                result["carryover"] = carryover_result
-                if not carryover_result.get("ok"):
-                    result["warnings"] = [carryover_result["error"]]
-            return result
+            return {"ok": True, "errors": [], "conflicts": []}
 
         try:
             self.restore_ref(onto_ref, park_changes=False)
@@ -80,17 +63,9 @@ class MergeMixin:
             result = self._merge_refs(parent, "WORKING_TREE", commit.hexsha, strategy=strategy)
             if not result.get("ok"):
                 result["failed_commit"] = commit.hexsha
-                if parked.get("stashed"):
-                    result["carryover"] = {"ok": False, "parked": True}
                 return result
 
-        result = {"ok": True, "errors": [], "conflicts": []}
-        if parked.get("stashed"):
-            carryover_result = self.reapply_parked_changes()
-            result["carryover"] = carryover_result
-            if not carryover_result.get("ok"):
-                result["warnings"] = [carryover_result["error"]]
-        return result
+        return {"ok": True, "errors": [], "conflicts": []}
 
     def _merge_refs(self, base_ref, ours_ref, theirs_ref, strategy="manual"):
         conflicts = []
@@ -172,7 +147,8 @@ class MergeMixin:
             self.manifest.update(merged_manifest)
             self.manifest.write()
 
-            self.restore_ref()
+            if ours_ref == "WORKING_TREE":
+                self.restore_ref()
             self._update_diffs()
             redraw("COZYSTUDIO_PT_changes")
             redraw("COZYSTUDIO_PT_history")
@@ -185,6 +161,68 @@ class MergeMixin:
         returned_conflicts = conflicts if strategy == "manual" else []
         ok = not errors and (not returned_conflicts or strategy in ("ours", "theirs"))
         return {"ok": ok, "errors": errors, "conflicts": returned_conflicts}
+
+    def _finalize_integration_commit(self, ref, base_ref=None):
+        if not self.repo:
+            return {"ok": False, "error": "Repository not initialized."}
+
+        try:
+            head_commit = self.repo.head.commit
+        except Exception:
+            return {"ok": False, "error": "No current commit to merge into."}
+
+        try:
+            their_commit = self.repo.commit(ref)
+        except Exception as e:
+            return {"ok": False, "error": f"Unable to resolve ref '{ref}': {e}"}
+
+        if base_ref is None:
+            try:
+                base_ref = self.repo.git.merge_base(head_commit.hexsha, their_commit.hexsha).strip()
+            except Exception:
+                base_ref = None
+
+        if base_ref and base_ref == head_commit.hexsha:
+            try:
+                self.repo.head.reference = their_commit
+                self.repo.head.reset(index=True, working_tree=True)
+                try:
+                    self.restore_ref(park_changes=False)
+                except Exception:
+                    pass
+                return {"ok": True, "fast_forward": True}
+            except Exception as e:
+                return {"ok": False, "error": f"Fast-forward failed: {e}"}
+
+        staged_paths = []
+        try:
+            for path in self.repo.untracked_files:
+                if path.startswith(".cozystudio/"):
+                    staged_paths.append(path)
+            for diff in self.repo.index.diff(None):
+                path = diff.b_path or diff.a_path
+                if path and path.startswith(".cozystudio/"):
+                    staged_paths.append(path)
+            if staged_paths:
+                self.repo.index.add(sorted(set(staged_paths)))
+        except Exception as e:
+            return {"ok": False, "error": f"Failed to stage merge outputs: {e}"}
+
+        try:
+            tree = self.repo.index.write_tree()
+            merge_message = f"Merge ref '{ref}'"
+            new_commit = self.repo.index.commit(
+                merge_message,
+                parent_commits=(head_commit, their_commit),
+                head=True,
+            )
+            try:
+                self.restore_ref(park_changes=False)
+            except Exception:
+                pass
+            return {"ok": True, "fast_forward": False, "commit": new_commit.hexsha, "tree": tree.hexsha}
+        except Exception as e:
+            return {"ok": False, "error": f"Merge commit failed: {e}"}
 
     def _conflict_ref_value(self, ref):
         if ref in {None, "WORKING_TREE"}:
