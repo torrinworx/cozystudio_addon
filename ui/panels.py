@@ -137,11 +137,11 @@ class COZYSTUDIO_PT_ChangesPanel(bpy.types.Panel):
         if commit_ui.get("viewing_past"):
             row = layout.row(align=True)
             row.label(
-                text=f"Detached at {branch_ui.get('head_short_hash') or 'commit'}",
+                text=f"Detached at {branch_ui.get('head_short_hash') or 'commit'} (not on a branch)",
                 icon="TIME",
             )
             if commit_ui.get("return_branch"):
-                op = row.operator("cozystudio.checkout_branch", text="Checkout Branch", icon="LOOP_BACK")
+                op = row.operator("cozystudio.checkout_branch", text="Return to Branch", icon="LOOP_BACK")
                 op.branch_name = commit_ui["return_branch"]
 
         if carryover_ui.get("has_parked"):
@@ -216,9 +216,22 @@ class COZYSTUDIO_PT_HistoryPanel(bpy.types.Panel):
 
         repo_ui = git_ui.get("repo", {})
         carryover_ui = git_ui.get("carryover", {})
+        branch_ui = git_ui.get("branch", {})
+        commit_ui = git_ui.get("commit", {})
         if not repo_ui.get("available"):
             layout.label(text="No repository available.", icon="ERROR")
             return
+
+        if branch_ui.get("detached"):
+            layout.label(
+                text=f"HEAD: detached at {branch_ui.get('head_short_hash') or 'commit'}",
+                icon="TIME",
+            )
+        else:
+            layout.label(
+                text=f"HEAD: {branch_ui.get('current') or 'unknown'}",
+                icon="CURRENT_FILE",
+            )
 
         wm = context.window_manager
         history_items = git_ui.get("history", {}).get("items", [])
@@ -231,8 +244,6 @@ class COZYSTUDIO_PT_HistoryPanel(bpy.types.Panel):
             item.summary = commit.get("summary", "(no message)")
             item.is_head = bool(commit.get("is_head"))
 
-        commit_ui = git_ui.get("commit", {})
-        branch_ui = git_ui.get("branch", {})
         if carryover_ui.get("has_parked"):
             box = layout.box()
             box.label(text="Parked Cozy changes block further checkout operations.", icon="INFO")
@@ -243,9 +254,12 @@ class COZYSTUDIO_PT_HistoryPanel(bpy.types.Panel):
             )
         if commit_ui.get("viewing_past") and branch_ui.get("head_short_hash"):
             row = layout.row(align=True)
-            row.label(text=f"Detached at {branch_ui['head_short_hash']}", icon="TIME")
+            row.label(
+                text=f"Detached at {branch_ui['head_short_hash']} (not on a branch)",
+                icon="TIME",
+            )
             if commit_ui.get("return_branch"):
-                op = row.operator("cozystudio.checkout_branch", text="Checkout Branch", icon="LOOP_BACK")
+                op = row.operator("cozystudio.checkout_branch", text="Return to Branch", icon="LOOP_BACK")
                 op.branch_name = commit_ui["return_branch"]
 
         if not history_items:
@@ -297,17 +311,76 @@ class COZYSTUDIO_PT_BranchesPanel(bpy.types.Panel):
         if branch_ui.get("detached"):
             row = layout.row(align=True)
             row.label(
-                text=f"Detached at {branch_ui.get('head_short_hash') or 'commit'}",
+                text=f"Detached at {branch_ui.get('head_short_hash') or 'commit'} (not on a branch)",
                 icon="TIME",
             )
             if commit_ui.get("return_branch"):
-                op = row.operator("cozystudio.checkout_branch", text="Checkout Branch", icon="LOOP_BACK")
+                op = row.operator("cozystudio.checkout_branch", text="Return to Branch", icon="LOOP_BACK")
                 op.branch_name = commit_ui["return_branch"]
         else:
             layout.label(
-                text=f"Current branch: {branch_ui.get('current') or 'unknown'}",
+                text=f"On branch: {branch_ui.get('current') or 'unknown'}",
                 icon="CURRENT_FILE",
             )
+
+        wm = context.window_manager
+        history_items = git_ui.get("history", {}).get("items", [])
+        selected_commit = None
+        if history_items:
+            try:
+                selected_commit = history_items[wm.cozystudio_commit_index]
+            except Exception:
+                selected_commit = None
+
+        create_box = layout.box()
+        create_box.label(text="Create Branch", icon="ADD")
+        create_box.prop(wm, "cozystudio_branch_name", text="Name")
+        create_box.prop(wm, "cozystudio_branch_source", text="From")
+
+        source = getattr(wm, "cozystudio_branch_source", "HEAD")
+        if source == "SELECTED":
+            if selected_commit:
+                create_box.label(
+                    text=(
+                        f"From commit: {selected_commit.get('short_hash', '')}  "
+                        f"{selected_commit.get('summary', '')}"
+                    ),
+                    icon="FILE_TEXT",
+                )
+                create_box.label(
+                    text="New branch will be checked out at this commit.",
+                    icon="INFO",
+                )
+            else:
+                create_box.label(
+                    text="Select a commit in History to use as source.",
+                    icon="INFO",
+                )
+        else:
+            if branch_ui.get("detached"):
+                create_box.label(
+                    text=(
+                        f"From HEAD (detached at {branch_ui.get('head_short_hash') or 'commit'})"
+                    ),
+                    icon="TIME",
+                )
+            else:
+                create_box.label(
+                    text=f"From HEAD on {branch_ui.get('current') or 'unknown'}",
+                    icon="CURRENT_FILE",
+                )
+            create_box.label(
+                text="New branch will be checked out at HEAD.",
+                icon="INFO",
+            )
+
+        create_row = create_box.row()
+        branch_name = (getattr(wm, "cozystudio_branch_name", "") or "").strip()
+        can_create = bool(branch_name) and (source != "SELECTED" or selected_commit)
+        create_row.enabled = can_create
+        op = create_row.operator("cozystudio.create_branch", text="Create Branch", icon="ADD")
+        op.branch_name = branch_name
+        op.ref = selected_commit.get("commit_hash", "") if selected_commit and source == "SELECTED" else ""
 
         branches = branch_ui.get("available", [])
         if not branches:
@@ -383,5 +456,3 @@ class COZYSTUDIO_PT_ConflictsPanel(bpy.types.Panel):
                     icon="CHECKMARK",
                 )
                 op.conflict_uuid = item["uuid"]
-
-

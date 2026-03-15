@@ -14,6 +14,41 @@ class CheckoutMixin:
     def switch_branch(self, branch_name):
         self.restore_ref(branch_name, operation="checkout_branch")
 
+    def create_branch(self, branch_name, ref=None):
+        if not self.repo or not self.initiated:
+            raise RuntimeError("Repository not initialized.")
+        target_ref = ref or "HEAD"
+        parked = self._park_cozy_changes("create_branch", target_ref)
+        if not parked.get("ok"):
+            raise RuntimeError(parked["error"])
+
+        self.suspend_checks = True
+        try:
+            if ref:
+                self.repo.git.checkout("-b", branch_name, ref)
+            else:
+                self.repo.git.checkout("-b", branch_name)
+
+            self._load_working_manifest()
+            self._restore_from_manifest()
+
+            integrity = self.validate_manifest_integrity()
+            self.last_integrity_report = integrity
+            if not integrity.get("ok"):
+                print("[BpyGit] Manifest integrity issues after branch creation:")
+                for err in integrity.get("errors", []):
+                    print(" -", err)
+
+            self._update_diffs()
+
+            redraw("COZYSTUDIO_PT_changes")
+            redraw("COZYSTUDIO_PT_history")
+        finally:
+            self.suspend_checks = False
+
+        if parked and parked.get("stashed"):
+            self.reapply_parked_changes()
+
     def _current_ref_label(self):
         if not self.repo:
             return None

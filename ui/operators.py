@@ -391,6 +391,62 @@ class COZYSTUDIO_OT_CheckoutBranch(_CozyOperatorMixin, bpy.types.Operator):
             return {"CANCELLED"}
 
 
+class COZYSTUDIO_OT_CreateBranch(_CozyOperatorMixin, bpy.types.Operator):
+    bl_idname = "cozystudio.create_branch"
+    bl_label = "Create Branch"
+    bl_description = "Create and checkout a new branch"
+
+    branch_name: bpy.props.StringProperty(
+        name="Branch",
+        description="Branch name to create",
+        default="",
+    )
+    ref: bpy.props.StringProperty(
+        name="Ref",
+        description="Optional commit hash to branch from",
+        default="",
+    )
+
+    def execute(self, context):
+        error = self._require_git()
+        if error:
+            self.report({"ERROR"}, error)
+            return {"CANCELLED"}
+        preflight = self._sync_preflight()
+        if preflight:
+            self.report({"ERROR"}, preflight)
+            return {"CANCELLED"}
+
+        branch_name = (self.branch_name or context.window_manager.cozystudio_branch_name or "").strip()
+        if not branch_name:
+            self.report({"WARNING"}, "Please enter a branch name")
+            return {"CANCELLED"}
+
+        repo = state.git_instance.repo
+        if repo and branch_name in repo.heads:
+            self.report({"ERROR"}, f"Branch '{branch_name}' already exists")
+            return {"CANCELLED"}
+
+        ref = (self.ref or "").strip() or None
+        if ref and repo:
+            try:
+                repo.commit(ref)
+            except Exception:
+                self.report({"ERROR"}, "Selected commit was not found")
+                return {"CANCELLED"}
+
+        try:
+            state.git_instance.create_branch(branch_name, ref=ref)
+            if hasattr(context.window_manager, "cozystudio_branch_name"):
+                context.window_manager.cozystudio_branch_name = ""
+            self.report({"INFO"}, f"Created branch {branch_name}")
+            return {"FINISHED"}
+        except Exception as e:
+            self.report({"ERROR"}, f"Branch creation failed: {e}")
+            traceback.print_exc()
+            return {"CANCELLED"}
+
+
 class COZYSTUDIO_OT_Merge(_CozyOperatorMixin, bpy.types.Operator):
     bl_idname = "cozystudio.merge"
     bl_label = "Merge"

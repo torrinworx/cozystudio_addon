@@ -17,7 +17,7 @@ This runs alongside Blender's autosave without interfering with it, so you can k
 - Datablock-based diffs written as readable files.
 - Stage or unstage individual changes or grouped updates.
 - Commit from inside Blender with clear blockers when something is wrong.
-- Check out older commits or switch branches from the UI.
+- Check out older commits, switch branches, or create branches from commits.
 - Merge and rebase with conflict resolution tools.
 
 # Quick Start
@@ -27,7 +27,7 @@ This runs alongside Blender's autosave without interfering with it, so you can k
 4. Make Blender changes; Cozy Studio will write datablocks automatically.
 5. Stage individual changes or groups from the panel.
 6. Commit with a message.
-7. Use **Checkout** to restore previous commits.
+7. Use **Checkout Commit** for a detached preview, or **Checkout Branch** to return to a branch.
 
 # Install
 1. Download the Cozy Studio add-on (zip or folder).

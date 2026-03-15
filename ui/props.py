@@ -18,6 +18,20 @@ def register_props():
         description="Message for this commit",
         default="",
     )
+    bpy.types.WindowManager.cozystudio_branch_name = bpy.props.StringProperty(
+        name="Branch Name",
+        description="Name for the new branch",
+        default="",
+    )
+    bpy.types.WindowManager.cozystudio_branch_source = bpy.props.EnumProperty(
+        name="Branch Source",
+        description="Source for the new branch",
+        items=[
+            ("HEAD", "HEAD", "Create from current HEAD"),
+            ("SELECTED", "Selected Commit", "Create from selected commit in History"),
+        ],
+        default="HEAD",
+    )
 
 
 def unregister_props():
@@ -27,3 +41,7 @@ def unregister_props():
         del bpy.types.WindowManager.cozystudio_commit_index
     if hasattr(bpy.types.WindowManager, "cozystudio_commit_message"):
         del bpy.types.WindowManager.cozystudio_commit_message
+    if hasattr(bpy.types.WindowManager, "cozystudio_branch_name"):
+        del bpy.types.WindowManager.cozystudio_branch_name
+    if hasattr(bpy.types.WindowManager, "cozystudio_branch_source"):
+        del bpy.types.WindowManager.cozystudio_branch_source
