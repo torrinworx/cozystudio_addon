@@ -9,7 +9,9 @@ class DiffsMixin:
     def _filter_changes(self, changes):
         IGNORE_PATTERNS = [
             "*.blend",
-            "*.blend1",
+            # Blender(by default) allows up to 32 incremental versions
+            "*.blend[0-9]",
+            "*.blend[0-9][0-9]", 
             CANONICAL_MANIFEST_REL,
         ]
 
