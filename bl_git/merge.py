@@ -422,7 +422,7 @@ class MergeMixin:
         return gitblocks_paths
 
     def _blocking_dirty_paths(self, dirty_paths):
-        allowed_patterns = ["*.blend", "*.blend1"]
+        allowed_patterns = ["*.blend", "*.blend[0-9]", "*.blend[0-9][0-9]"] # Blender(by default) allows up to 32 incremental versions
         gitblocks_paths = self._gitblocks_dirty_paths(dirty_paths)
         blocking = set()
         for path in dirty_paths or set():
